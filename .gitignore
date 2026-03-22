@@ -1,0 +1,7 @@
+.env
+infra/terraform.tfvars
+infra/.terraform/
+infra/terraform.tfstate
+infra/terraform.tfstate.backup
+node_modules/
+.DS_Store
