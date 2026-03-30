@@ -1,12 +1,64 @@
 const pool = require('../db/pool');
 const { randomUUID } = require('crypto');
+const { RESOURCE_TYPES } = require('../utils/constants');
+const { parseBoolean, parseCoordinate, sendError } = require('../utils/http');
 
 async function allocateResource(req, res) {
     const { incident_id } = req.params;
     const { incident_location, required_resource_type, required_capabilities = [] } = req.body;
+    const idempotencyKey = req.get('Idempotency-Key');
+    const dryRun = parseBoolean(req.query.dry_run, false);
+    const latitude = parseCoordinate(incident_location?.lat);
+    const longitude = parseCoordinate(incident_location?.long);
 
-    if (!incident_location?.lat || !incident_location?.long || !required_resource_type) {
-        return res.status(400).json({ error: 'Missing required fields' });
+    if (!idempotencyKey) {
+        return sendError(
+            res,
+            400,
+            req.traceId,
+            'MISSING_IDEMPOTENCY_KEY',
+            'Idempotency-Key header is required for allocation requests.'
+        );
+    }
+
+    if (!incident_id) {
+        return sendError(
+            res,
+            400,
+            req.traceId,
+            'INVALID_INCIDENT_ID',
+            'incident_id path parameter is required.'
+        );
+    }
+
+    if (latitude === null || longitude === null || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+        return sendError(
+            res,
+            400,
+            req.traceId,
+            'INVALID_INCIDENT_LOCATION',
+            'incident_location.lat and incident_location.long must be valid coordinates.'
+        );
+    }
+
+    if (!required_resource_type || !RESOURCE_TYPES.includes(required_resource_type)) {
+        return sendError(
+            res,
+            400,
+            req.traceId,
+            'INVALID_RESOURCE_TYPE',
+            `required_resource_type must be one of: ${RESOURCE_TYPES.join(', ')}`
+        );
+    }
+
+    if (!Array.isArray(required_capabilities)) {
+        return sendError(
+            res,
+            400,
+            req.traceId,
+            'INVALID_CAPABILITIES',
+            'required_capabilities must be an array.'
+        );
     }
 
     const client = await pool.connect();
@@ -24,18 +76,41 @@ async function allocateResource(req, res) {
             LIMIT 1 FOR UPDATE SKIP LOCKED;
         `;
         const findRes = await client.query(findQuery, [
-            incident_location.lat,
-            incident_location.long,
+            latitude,
+            longitude,
             required_resource_type,
             JSON.stringify(required_capabilities)
         ]);
 
         if (findRes.rowCount === 0) {
             await client.query('ROLLBACK');
-            return res.status(404).json({ status: 'FAILED', message: 'No resource found' });
+            return sendError(
+                res,
+                404,
+                req.traceId,
+                'RESOURCE_NOT_FOUND',
+                'No matching resource is currently available.'
+            );
         }
 
         const resrc = findRes.rows[0];
+
+        if (dryRun) {
+            await client.query('ROLLBACK');
+            return res.status(200).json({
+                allocation_id: null,
+                incident_id,
+                status: 'SIMULATED',
+                dry_run: true,
+                resource: {
+                    resource_id: resrc.resource_id,
+                    resource_type: required_resource_type,
+                    driver_contact: resrc.driver_contact
+                },
+                distance_km: Number.parseFloat(Number(resrc.dist_km).toFixed(2)),
+                trace_id: req.traceId
+            });
+        }
 
         const updateQuery = `
             UPDATE resources
@@ -48,20 +123,22 @@ async function allocateResource(req, res) {
         `;
         const updateRes = await client.query(updateQuery, [
             incident_id,
-            incident_location.lat,
-            incident_location.long,
+            latitude,
+            longitude,
             resrc.resource_id,
             resrc.version
         ]);
 
         if (updateRes.rowCount === 0) {
             await client.query('ROLLBACK');
-            return res.status(409).json({
-                error_code: 'RESOURCE_BUSY_CONFLICT',
-                message: 'The optimal resource was locked by another transaction. Please retry.',
-                trace_id: randomUUID(),
-                details: { attempted_resource_id: resrc.resource_id }
-            });
+            return sendError(
+                res,
+                409,
+                req.traceId,
+                'RESOURCE_BUSY_CONFLICT',
+                'The optimal resource was locked by another transaction. Please retry.',
+                { attempted_resource_id: resrc.resource_id }
+            );
         }
 
         await client.query('COMMIT');
@@ -75,13 +152,20 @@ async function allocateResource(req, res) {
                 resource_type: required_resource_type,
                 driver_contact: resrc.driver_contact
             },
-            distance_km: parseFloat(resrc.dist_km.toFixed(2))
+            distance_km: Number.parseFloat(Number(resrc.dist_km).toFixed(2)),
+            trace_id: req.traceId
         });
 
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('[allocate] Error:', err.message);
-        res.status(500).json({ error: err.message, trace_id: randomUUID() });
+        return sendError(
+            res,
+            500,
+            req.traceId || randomUUID(),
+            'ALLOCATION_FAILED',
+            'Unable to allocate a resource at this time.'
+        );
     } finally {
         client.release();
     }

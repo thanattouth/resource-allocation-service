@@ -17,11 +17,8 @@ async function setupDatabase() {
         await client.query('CREATE EXTENSION IF NOT EXISTS postgis;');
         await client.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto";');
 
-        console.log('[init-db] Dropping old table...');
-        await client.query('DROP TABLE IF EXISTS resources CASCADE;');
-
         const createTableQuery = `
-            CREATE TABLE resources (
+            CREATE TABLE IF NOT EXISTS resources (
                 resource_id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 resource_type       VARCHAR(50) NOT NULL,
                 capacity            INT DEFAULT 0,
@@ -36,18 +33,26 @@ async function setupDatabase() {
                 last_updated_at     TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
 
-            CREATE INDEX idx_resources_location ON resources USING GIST(current_location);
+            CREATE INDEX IF NOT EXISTS idx_resources_location ON resources USING GIST(current_location);
         `;
         await client.query(createTableQuery);
         console.log("[init-db] Table 'resources' created successfully!");
 
         const seedQuery = `
             INSERT INTO resources (resource_type, status, capabilities, driver_contact, current_location)
-            VALUES 
-            ('POWER_GENERATOR_TRUCK', 'AVAILABLE', '["200KW", "HIGH_VOLTAGE"]', '089-111-2222',
-                ST_GeographyFromText('POINT(100.5018 13.7563)')),
-            ('AMBULANCE_VAN', 'AVAILABLE', '["AED", "OXYGEN"]', '081-234-5678',
-                ST_GeographyFromText('POINT(100.5200 13.7300)'));
+            SELECT *
+            FROM (
+                VALUES
+                    ('POWER_GENERATOR_TRUCK', 'AVAILABLE', '["200KW", "HIGH_VOLTAGE"]'::jsonb, '089-111-2222',
+                        ST_GeographyFromText('POINT(100.5018 13.7563)')),
+                    ('AMBULANCE_VAN', 'AVAILABLE', '["AED", "OXYGEN"]'::jsonb, '081-234-5678',
+                        ST_GeographyFromText('POINT(100.5200 13.7300)'))
+            ) AS seed(resource_type, status, capabilities, driver_contact, current_location)
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM resources existing
+                WHERE existing.driver_contact = seed.driver_contact
+            );
         `;
         await client.query(seedQuery);
         console.log('[init-db] Seed data inserted!');

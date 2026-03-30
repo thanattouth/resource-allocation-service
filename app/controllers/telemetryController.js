@@ -1,15 +1,97 @@
 const pool = require('../db/pool');
+const { RESOURCE_STATUSES } = require('../utils/constants');
+const { parseCoordinate, sendError } = require('../utils/http');
 
 async function updateTelemetry(req, res) {
     const { resource_id } = req.params;
-    const { status, lat, long, battery_level, version, new_dest_lat, new_dest_long } = req.body;
+    const {
+        status,
+        battery_level,
+        version,
+        current_location,
+        destination_location,
+        lat,
+        long,
+        new_dest_lat,
+        new_dest_long
+    } = req.body;
 
-    // Validate: ถ้า status = TRANSPORTING ต้องมี destination
-    if (status === 'TRANSPORTING' && (!new_dest_lat || !new_dest_long)) {
-        return res.status(400).json({
-            error_code: 'MISSING_DESTINATION',
-            message: 'destination_location is required when status is TRANSPORTING'
-        });
+    const currentLat = parseCoordinate(current_location?.lat ?? lat);
+    const currentLong = parseCoordinate(current_location?.long ?? long);
+    const destinationLat = parseCoordinate(destination_location?.lat ?? new_dest_lat);
+    const destinationLong = parseCoordinate(destination_location?.long ?? new_dest_long);
+    const battery = battery_level === undefined || battery_level === null
+        ? null
+        : Number.parseFloat(battery_level);
+
+    if (!resource_id) {
+        return sendError(
+            res,
+            400,
+            req.traceId,
+            'INVALID_RESOURCE_ID',
+            'resource_id path parameter is required.'
+        );
+    }
+
+    if (version === undefined || !Number.isInteger(Number(version))) {
+        return sendError(
+            res,
+            400,
+            req.traceId,
+            'INVALID_VERSION',
+            'version is required and must be an integer.'
+        );
+    }
+
+    if (status && !RESOURCE_STATUSES.includes(status)) {
+        return sendError(
+            res,
+            400,
+            req.traceId,
+            'INVALID_STATUS',
+            `status must be one of: ${RESOURCE_STATUSES.join(', ')}`
+        );
+    }
+
+    if ((currentLat !== null && (currentLat < -90 || currentLat > 90)) || (currentLong !== null && (currentLong < -180 || currentLong > 180))) {
+        return sendError(
+            res,
+            400,
+            req.traceId,
+            'INVALID_CURRENT_LOCATION',
+            'current_location must contain valid lat/long coordinates.'
+        );
+    }
+
+    if (status === 'TRANSPORTING' && (destinationLat === null || destinationLong === null)) {
+        return sendError(
+            res,
+            400,
+            req.traceId,
+            'MISSING_DESTINATION',
+            'destination_location is required when status is TRANSPORTING'
+        );
+    }
+
+    if ((destinationLat !== null && (destinationLat < -90 || destinationLat > 90)) || (destinationLong !== null && (destinationLong < -180 || destinationLong > 180))) {
+        return sendError(
+            res,
+            400,
+            req.traceId,
+            'INVALID_DESTINATION_LOCATION',
+            'destination_location must contain valid lat/long coordinates.'
+        );
+    }
+
+    if (battery !== null && (!Number.isFinite(battery) || battery < 0 || battery > 100)) {
+        return sendError(
+            res,
+            400,
+            req.traceId,
+            'INVALID_BATTERY_LEVEL',
+            'battery_level must be between 0 and 100.'
+        );
     }
 
     try {
@@ -36,16 +118,39 @@ async function updateTelemetry(req, res) {
         `;
 
         const result = await pool.query(query, [
-            status, lat, long, battery_level,
-            resource_id, version,
-            new_dest_lat, new_dest_long
+            status,
+            currentLat,
+            currentLong,
+            battery,
+            resource_id,
+            Number(version),
+            destinationLat,
+            destinationLong
         ]);
 
         if (result.rowCount === 0) {
-            return res.status(409).json({
-                error_code: 'VERSION_CONFLICT',
-                message: 'Resource not found or version mismatch'
-            });
+            const existing = await pool.query(
+                'SELECT resource_id FROM resources WHERE resource_id = $1::uuid',
+                [resource_id]
+            );
+
+            if (existing.rowCount === 0) {
+                return sendError(
+                    res,
+                    404,
+                    req.traceId,
+                    'RESOURCE_NOT_FOUND',
+                    `Resource ID ${resource_id} does not exist.`
+                );
+            }
+
+            return sendError(
+                res,
+                409,
+                req.traceId,
+                'VERSION_CONFLICT',
+                'Resource version mismatch. Please fetch the latest resource state and retry.'
+            );
         }
 
         const updated = result.rows[0];
@@ -53,12 +158,29 @@ async function updateTelemetry(req, res) {
             resource_id: updated.resource_id,
             status: updated.status,
             server_instruction: 'CONTINUE',
-            last_updated_at: updated.last_updated_at
+            last_updated_at: updated.last_updated_at,
+            trace_id: req.traceId
         });
 
     } catch (err) {
         console.error('[telemetry] Error:', err.message);
-        res.status(500).json({ error: err.message });
+        if (err.code === '22P02') {
+            return sendError(
+                res,
+                400,
+                req.traceId,
+                'INVALID_RESOURCE_ID',
+                'resource_id must be a valid UUID.'
+            );
+        }
+
+        return sendError(
+            res,
+            500,
+            req.traceId,
+            'TELEMETRY_UPDATE_FAILED',
+            'Unable to update telemetry at this time.'
+        );
     }
 }
 

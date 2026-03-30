@@ -1,0 +1,25 @@
+{
+  "name": "resource-allocation-service",
+  "version": "0.1.0",
+  "description": "Disaster resource allocation microservice for AWS Learner Lab",
+  "main": "app/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node app/main.js",
+    "dev": "NODE_ENV=development node app/main.js",
+    "init-db": "node app/db/init-db.js",
+    "check": "node --check app/main.js && node --check app/controllers/allocateController.js && node --check app/controllers/nearbyController.js && node --check app/controllers/telemetryController.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "pg": "^8.13.3"
+  },
+  "devDependencies": {
+    "supertest": "^7.1.0"
+  }
+}
