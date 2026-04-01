@@ -26,3 +26,9 @@ npm start
 - `POST /v1/incidents/:incident_id/allocations` supports `?dry_run=true`
 - Every response includes `trace_id`
 - `Idempotency-Key` is currently required on allocation requests
+
+## Architecture Notes
+
+- [Session 1 Remediation Log](/Users/hamin/Documents/CS366/ResourceAllocationService/docs/remediation-log-session1.md)
+- [Sync Call Policy](/Users/hamin/Documents/CS366/ResourceAllocationService/docs/sync-call-policy.md)
+- [Self-Review vs Implementation Notes](/Users/hamin/Documents/CS366/ResourceAllocationService/docs/self-review-implementation-notes.md)
