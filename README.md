@@ -27,6 +27,20 @@ npm start
 - Every response includes `trace_id`
 - `Idempotency-Key` is currently required on allocation requests
 
+## Out of Scope
+
+This service is responsible only for resource discovery, allocation decisions, and resource telemetry updates.
+
+The following capabilities are explicitly out of scope:
+
+- Creating or managing incident records
+- Dispatching notifications or communication to responders
+- Managing shelters, hospitals, or destination capacity
+- User accounts, authentication, or role management
+- Cross-service reporting, analytics, or command-center dashboards
+- Long-term route planning or navigation guidance for vehicles
+- Direct control of IoT devices beyond accepting telemetry updates
+
 ## Architecture Notes
 
 - [Session 1 Remediation Log](/Users/hamin/Documents/CS366/ResourceAllocationService/docs/remediation-log-session1.md)
