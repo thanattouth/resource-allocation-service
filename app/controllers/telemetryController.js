@@ -1,6 +1,7 @@
 const pool = require('../db/pool');
 const { RESOURCE_STATUSES } = require('../utils/constants');
 const { parseCoordinate, sendError } = require('../utils/http');
+const { validateStatusTransition } = require('../domain/resourceState');
 
 async function updateTelemetry(req, res) {
     const { resource_id } = req.params;
@@ -95,6 +96,38 @@ async function updateTelemetry(req, res) {
     }
 
     try {
+        const existingResourceResult = await pool.query(
+            `
+                SELECT resource_id, status, assigned_incident_id, destination_location, version
+                FROM resources
+                WHERE resource_id = $1::uuid
+            `,
+            [resource_id]
+        );
+
+        if (existingResourceResult.rowCount === 0) {
+            return sendError(
+                res,
+                404,
+                req.traceId,
+                'RESOURCE_NOT_FOUND',
+                `Resource ID ${resource_id} does not exist.`
+            );
+        }
+
+        const currentResource = existingResourceResult.rows[0];
+        const transitionError = validateStatusTransition(currentResource, status);
+
+        if (transitionError) {
+            return sendError(
+                res,
+                409,
+                req.traceId,
+                transitionError.errorCode,
+                transitionError.message
+            );
+        }
+
         const query = `
             UPDATE resources SET 
                 status = COALESCE($1, status),
@@ -129,21 +162,6 @@ async function updateTelemetry(req, res) {
         ]);
 
         if (result.rowCount === 0) {
-            const existing = await pool.query(
-                'SELECT resource_id FROM resources WHERE resource_id = $1::uuid',
-                [resource_id]
-            );
-
-            if (existing.rowCount === 0) {
-                return sendError(
-                    res,
-                    404,
-                    req.traceId,
-                    'RESOURCE_NOT_FOUND',
-                    `Resource ID ${resource_id} does not exist.`
-                );
-            }
-
             return sendError(
                 res,
                 409,
@@ -158,6 +176,14 @@ async function updateTelemetry(req, res) {
             resource_id: updated.resource_id,
             status: updated.status,
             server_instruction: 'CONTINUE',
+            version: updated.version,
+            destination_location: destinationLat !== null && destinationLong !== null
+                ? {
+                    ...(destination_location?.name ? { name: destination_location.name } : {}),
+                    lat: destinationLat,
+                    long: destinationLong
+                }
+                : null,
             last_updated_at: updated.last_updated_at,
             trace_id: req.traceId
         });
