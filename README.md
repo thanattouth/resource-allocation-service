@@ -46,3 +46,4 @@ The following capabilities are explicitly out of scope:
 - [Session 1 Remediation Log](/Users/hamin/Documents/CS366/ResourceAllocationService/docs/remediation-log-session1.md)
 - [Sync Call Policy](/Users/hamin/Documents/CS366/ResourceAllocationService/docs/sync-call-policy.md)
 - [Self-Review vs Implementation Notes](/Users/hamin/Documents/CS366/ResourceAllocationService/docs/self-review-implementation-notes.md)
+- [Infra Bootstrap](/Users/hamin/Documents/CS366/ResourceAllocationService/infra/README.md)

@@ -1,0 +1,40 @@
+#!/bin/bash
+set -euxo pipefail
+
+dnf update -y
+dnf install -y docker
+systemctl enable docker
+systemctl start docker
+usermod -aG docker ec2-user
+
+mkdir -p /opt/resource-allocation
+
+cat >/opt/resource-allocation/.env <<EOF
+PORT=${app_port}
+NODE_ENV=production
+DB_HOST=${db_host}
+DB_PORT=${db_port}
+DB_USER=${db_user}
+DB_PASSWORD=${db_password}
+DB_NAME=${db_name}
+DB_SSL=true
+DB_CONNECT_TIMEOUT=10000
+DB_POOL_MAX=10
+AWS_REGION=${aws_region}
+DYNAMODB_IDEMPOTENCY_TABLE=${dynamodb_table_name}
+IDEMPOTENCY_TTL_HOURS=24
+EOF
+
+aws ecr get-login-password --region ${aws_region} | docker login --username AWS --password-stdin $(echo ${image_uri} | cut -d/ -f1)
+
+if docker pull ${image_uri}; then
+  docker rm -f resource-allocation || true
+  docker run -d \
+    --name resource-allocation \
+    --restart unless-stopped \
+    --env-file /opt/resource-allocation/.env \
+    -p ${app_port}:${app_port} \
+    ${image_uri}
+else
+  echo "Container image ${image_uri} is not available yet. Push the image to ECR, then rerun the docker pull/run commands."
+fi
