@@ -40,10 +40,23 @@ test('PATCH /v1/resources/:resource_id/telemetry requires integer version', asyn
     .patch('/v1/resources/00000000-0000-0000-0000-000000000001/telemetry')
     .send({
       status: 'TRANSPORTING',
-      current_location: { lat: 13.758, long: 100.505 },
-      destination_location: { name: 'Siriraj Hospital', lat: 13.759, long: 100.485 }
+      current_location: { lat: 13.758, long: 100.505 }
     });
 
   assert.equal(response.statusCode, 400);
   assert.equal(response.body.error_code, 'INVALID_VERSION');
+});
+
+test('POST /v1/resources/:resource_id/transport-start requires Idempotency-Key', async () => {
+  const response = await request(app)
+    .post('/v1/resources/00000000-0000-0000-0000-000000000001/transport-start')
+    .send({
+      incident_id: 'INC-2024-0801',
+      transport_type: 'SHELTER_EVACUATION',
+      current_location: { lat: 13.758, long: 100.505 },
+      version: 1
+    });
+
+  assert.equal(response.statusCode, 400);
+  assert.equal(response.body.error_code, 'MISSING_IDEMPOTENCY_KEY');
 });

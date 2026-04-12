@@ -4,6 +4,7 @@ const app = express();
 
 const getNearbyResources = require('./controllers/nearbyController');
 const allocateResource   = require('./controllers/allocateController');
+const startTransport     = require('./controllers/transportStartController');
 const updateTelemetry    = require('./controllers/telemetryController');
 const requestContext = require('./middleware/requestContext');
 const { sendError } = require('./utils/http');
@@ -19,6 +20,7 @@ app.get('/health', (req, res) => {
 // Routes
 app.get('/v1/resources/nearby',                   getNearbyResources);
 app.post('/v1/incidents/:incident_id/allocations', allocateResource);
+app.post('/v1/resources/:resource_id/transport-start', startTransport);
 app.patch('/v1/resources/:resource_id/telemetry',  updateTelemetry);
 
 // Global error handler

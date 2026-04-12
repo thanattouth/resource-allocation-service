@@ -4,6 +4,11 @@ const { RESOURCE_TYPES } = require('../utils/constants');
 const { parseBoolean, parseCoordinate, sendError } = require('../utils/http');
 const { calculateEstimatedArrivalTimeMinutes } = require('../domain/allocation');
 const { buildRequestFingerprint } = require('../utils/idempotency');
+const {
+    claimIdempotencyRecord,
+    completeIdempotencyRecord,
+    releaseIdempotencyRecord
+} = require('../utils/dynamoIdempotency');
 
 function buildAllocationResponse({
     allocationId,
@@ -99,53 +104,73 @@ async function allocateResource(req, res) {
         );
     }
 
+    let idempotencyClaimed = false;
+    let idempotencyCompleted = false;
+
+    let claimResult;
+    try {
+        claimResult = await claimIdempotencyRecord({
+            idempotencyKey,
+            incidentId: incident_id,
+            requestFingerprint
+        });
+    } catch (error) {
+        console.error('[allocate] DynamoDB claim error:', error.message);
+        return sendError(
+            res,
+            500,
+            req.traceId,
+            'IDEMPOTENCY_STORE_UNAVAILABLE',
+            'Unable to verify idempotency for this request.'
+        );
+    }
+
+    if (claimResult.kind === 'RETRY') {
+        return sendError(
+            res,
+            409,
+            req.traceId,
+            'IDEMPOTENCY_RETRY_REQUIRED',
+            'Idempotency state could not be confirmed. Please retry the same request.'
+        );
+    }
+
+    if (claimResult.kind === 'CONFLICT') {
+        return sendError(
+            res,
+            409,
+            req.traceId,
+            'IDEMPOTENCY_KEY_REUSED',
+            'This Idempotency-Key was already used with a different request payload.'
+        );
+    }
+
+    if (claimResult.kind === 'REPLAY') {
+        const responsePayload = {
+            ...claimResult.responsePayload,
+            trace_id: req.traceId
+        };
+        return res.status(responsePayload.dry_run ? 200 : 201).json(responsePayload);
+    }
+
+    if (claimResult.kind === 'PROCESSING') {
+        return sendError(
+            res,
+            409,
+            req.traceId,
+            'IDEMPOTENCY_REQUEST_IN_PROGRESS',
+            'An identical request with this Idempotency-Key is still being processed.'
+        );
+    }
+
+    idempotencyClaimed = true;
+
     const client = await pool.connect();
     let transactionOpen = false;
+    let transactionCommitted = false;
     try {
         await client.query('BEGIN');
         transactionOpen = true;
-
-        const existingIdempotency = await client.query(
-            `
-                SELECT incident_id, request_fingerprint, response_payload, status
-                FROM allocation_requests
-                WHERE idempotency_key = $1
-                FOR UPDATE
-            `,
-            [idempotencyKey]
-        );
-
-        if (existingIdempotency.rowCount > 0) {
-            const record = existingIdempotency.rows[0];
-
-            if (record.request_fingerprint !== requestFingerprint || record.incident_id !== incident_id) {
-                await client.query('ROLLBACK');
-                return sendError(
-                    res,
-                    409,
-                    req.traceId,
-                    'IDEMPOTENCY_KEY_REUSED',
-                    'This Idempotency-Key was already used with a different request payload.'
-                );
-            }
-
-            if (record.status === 'COMPLETED' && record.response_payload) {
-                await client.query('COMMIT');
-                transactionOpen = false;
-                return res.status(dryRun ? 200 : 201).json({
-                    ...record.response_payload,
-                    trace_id: req.traceId
-                });
-            }
-        } else {
-            await client.query(
-                `
-                    INSERT INTO allocation_requests (idempotency_key, incident_id, request_fingerprint, status)
-                    VALUES ($1, $2, $3, 'PROCESSING')
-                `,
-                [idempotencyKey, incident_id, requestFingerprint]
-            );
-        }
 
         const findQuery = `
             SELECT resource_id, version, driver_contact,
@@ -167,6 +192,10 @@ async function allocateResource(req, res) {
         if (findRes.rowCount === 0) {
             await client.query('ROLLBACK');
             transactionOpen = false;
+            if (idempotencyClaimed) {
+                await releaseIdempotencyRecord(idempotencyKey);
+                idempotencyClaimed = false;
+            }
             return sendError(
                 res,
                 404,
@@ -190,18 +219,15 @@ async function allocateResource(req, res) {
                 dryRun: true
             });
 
-            await client.query(
-                `
-                    UPDATE allocation_requests
-                    SET response_payload = $2::jsonb,
-                        status = 'COMPLETED',
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE idempotency_key = $1
-                `,
-                [idempotencyKey, JSON.stringify(responsePayload)]
-            );
             await client.query('COMMIT');
             transactionOpen = false;
+            transactionCommitted = true;
+            await completeIdempotencyRecord({
+                idempotencyKey,
+                allocationId: null,
+                responsePayload
+            });
+            idempotencyCompleted = true;
             return res.status(200).json(responsePayload);
         }
 
@@ -225,6 +251,10 @@ async function allocateResource(req, res) {
         if (updateRes.rowCount === 0) {
             await client.query('ROLLBACK');
             transactionOpen = false;
+            if (idempotencyClaimed) {
+                await releaseIdempotencyRecord(idempotencyKey);
+                idempotencyClaimed = false;
+            }
             return sendError(
                 res,
                 409,
@@ -246,20 +276,15 @@ async function allocateResource(req, res) {
             traceId: req.traceId
         });
 
-        await client.query(
-            `
-                UPDATE allocation_requests
-                SET allocation_id = $2,
-                    response_payload = $3::jsonb,
-                    status = 'COMPLETED',
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE idempotency_key = $1
-            `,
-            [idempotencyKey, allocationId, JSON.stringify(responsePayload)]
-        );
-
         await client.query('COMMIT');
         transactionOpen = false;
+        transactionCommitted = true;
+        await completeIdempotencyRecord({
+            idempotencyKey,
+            allocationId,
+            responsePayload
+        });
+        idempotencyCompleted = true;
         res.status(201).json(responsePayload);
 
     } catch (err) {
@@ -271,6 +296,13 @@ async function allocateResource(req, res) {
             }
         }
         console.error('[allocate] Error:', err.message);
+        if (idempotencyClaimed && !idempotencyCompleted && !transactionCommitted) {
+            try {
+                await releaseIdempotencyRecord(idempotencyKey);
+            } catch (releaseError) {
+                console.error('[allocate] DynamoDB release error:', releaseError.message);
+            }
+        }
         return sendError(
             res,
             500,

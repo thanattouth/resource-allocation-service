@@ -10,17 +10,12 @@ async function updateTelemetry(req, res) {
         battery_level,
         version,
         current_location,
-        destination_location,
         lat,
-        long,
-        new_dest_lat,
-        new_dest_long
+        long
     } = req.body;
 
     const currentLat = parseCoordinate(current_location?.lat ?? lat);
     const currentLong = parseCoordinate(current_location?.long ?? long);
-    const destinationLat = parseCoordinate(destination_location?.lat ?? new_dest_lat);
-    const destinationLong = parseCoordinate(destination_location?.long ?? new_dest_long);
     const battery = battery_level === undefined || battery_level === null
         ? null
         : Number.parseFloat(battery_level);
@@ -62,26 +57,6 @@ async function updateTelemetry(req, res) {
             req.traceId,
             'INVALID_CURRENT_LOCATION',
             'current_location must contain valid lat/long coordinates.'
-        );
-    }
-
-    if (status === 'TRANSPORTING' && (destinationLat === null || destinationLong === null)) {
-        return sendError(
-            res,
-            400,
-            req.traceId,
-            'MISSING_DESTINATION',
-            'destination_location is required when status is TRANSPORTING'
-        );
-    }
-
-    if ((destinationLat !== null && (destinationLat < -90 || destinationLat > 90)) || (destinationLong !== null && (destinationLong < -180 || destinationLong > 180))) {
-        return sendError(
-            res,
-            400,
-            req.traceId,
-            'INVALID_DESTINATION_LOCATION',
-            'destination_location must contain valid lat/long coordinates.'
         );
     }
 
@@ -136,14 +111,9 @@ async function updateTelemetry(req, res) {
                     THEN ST_SetSRID(ST_MakePoint($3::float8, $2::float8), 4326)::geography 
                     ELSE current_location 
                 END,
-                destination_location = CASE 
-                    WHEN $1 = 'TRANSPORTING' AND $7::float8 IS NOT NULL AND $8::float8 IS NOT NULL 
-                    THEN ST_SetSRID(ST_MakePoint($8::float8, $7::float8), 4326)::geography
-                    WHEN $1 = 'AVAILABLE' THEN NULL 
-                    ELSE destination_location 
-                END,
                 battery_level = COALESCE($4::float8, battery_level),
                 assigned_incident_id = CASE WHEN $1 = 'AVAILABLE' THEN NULL ELSE assigned_incident_id END,
+                destination_location = CASE WHEN $1 = 'AVAILABLE' THEN NULL ELSE destination_location END,
                 last_updated_at = CURRENT_TIMESTAMP,
                 version = version + 1
             WHERE resource_id = $5::uuid AND version = $6::int 
@@ -156,9 +126,7 @@ async function updateTelemetry(req, res) {
             currentLong,
             battery,
             resource_id,
-            Number(version),
-            destinationLat,
-            destinationLong
+            Number(version)
         ]);
 
         if (result.rowCount === 0) {
@@ -177,13 +145,6 @@ async function updateTelemetry(req, res) {
             status: updated.status,
             server_instruction: 'CONTINUE',
             version: updated.version,
-            destination_location: destinationLat !== null && destinationLong !== null
-                ? {
-                    ...(destination_location?.name ? { name: destination_location.name } : {}),
-                    lat: destinationLat,
-                    long: destinationLong
-                }
-                : null,
             last_updated_at: updated.last_updated_at,
             trace_id: req.traceId
         });

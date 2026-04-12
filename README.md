@@ -7,6 +7,7 @@ Resource Allocation microservice for disaster response scenarios. This service i
 - `GET /health`
 - `GET /v1/resources/nearby`
 - `POST /v1/incidents/:incident_id/allocations`
+- `POST /v1/resources/:resource_id/transport-start`
 - `PATCH /v1/resources/:resource_id/telemetry`
 
 ## Required environment variables
@@ -26,6 +27,8 @@ npm start
 - `POST /v1/incidents/:incident_id/allocations` supports `?dry_run=true`
 - Every response includes `trace_id`
 - `Idempotency-Key` is currently required on allocation requests
+- `POST /v1/resources/:resource_id/transport-start` is used for `ON_SITE -> TRANSPORTING` transitions
+- Idempotency records are stored in DynamoDB via `DYNAMODB_IDEMPOTENCY_TABLE`
 
 ## Out of Scope
 
@@ -35,11 +38,13 @@ The following capabilities are explicitly out of scope:
 
 - Creating or managing incident records
 - Dispatching notifications or communication to responders
-- Managing shelters, hospitals, or destination capacity
+- Managing shelter master data, hospital master data, or destination capacity
 - User accounts, authentication, or role management
 - Cross-service reporting, analytics, or command-center dashboards
 - Long-term route planning or navigation guidance for vehicles
 - Direct control of IoT devices beyond accepting telemetry updates
+
+This service may consume destination recommendations from downstream services for transport scenarios, but it does not own or manage those destination domains.
 
 ## Architecture Notes
 
@@ -47,3 +52,4 @@ The following capabilities are explicitly out of scope:
 - [Sync Call Policy](/Users/hamin/Documents/CS366/ResourceAllocationService/docs/sync-call-policy.md)
 - [Self-Review vs Implementation Notes](/Users/hamin/Documents/CS366/ResourceAllocationService/docs/self-review-implementation-notes.md)
 - [Infra Bootstrap](/Users/hamin/Documents/CS366/ResourceAllocationService/infra/README.md)
+- EC2 to RDS validation should cover `GET /v1/resources/nearby`, `POST /v1/incidents/:incident_id/allocations`, `POST /v1/resources/:resource_id/transport-start`, and `PATCH /v1/resources/:resource_id/telemetry`
