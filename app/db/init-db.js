@@ -33,19 +33,7 @@ async function setupDatabase() {
                 last_updated_at     TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
 
-            CREATE TABLE IF NOT EXISTS allocation_requests (
-                idempotency_key      VARCHAR(255) PRIMARY KEY,
-                incident_id          VARCHAR(50) NOT NULL,
-                request_fingerprint  VARCHAR(64) NOT NULL,
-                allocation_id        VARCHAR(50),
-                response_payload     JSONB,
-                status               VARCHAR(20) NOT NULL DEFAULT 'PROCESSING',
-                created_at           TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                updated_at           TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-            );
-
             CREATE INDEX IF NOT EXISTS idx_resources_location ON resources USING GIST(current_location);
-            CREATE INDEX IF NOT EXISTS idx_allocation_requests_incident_id ON allocation_requests (incident_id);
         `;
         await client.query(createTableQuery);
         console.log("[init-db] Table 'resources' created successfully!");

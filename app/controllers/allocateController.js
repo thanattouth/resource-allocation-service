@@ -1,7 +1,8 @@
 const pool = require('../db/pool');
 const { randomUUID } = require('crypto');
 const { RESOURCE_TYPES } = require('../utils/constants');
-const { parseBoolean, parseCoordinate, sendError } = require('../utils/http');
+const { isDatabaseTimeoutError, setLocalStatementTimeout } = require('../utils/db');
+const { parseBoolean, parseCoordinate, sendError, sendTimeoutError } = require('../utils/http');
 const { calculateEstimatedArrivalTimeMinutes } = require('../domain/allocation');
 const { buildRequestFingerprint } = require('../utils/idempotency');
 const {
@@ -171,6 +172,7 @@ async function allocateResource(req, res) {
     try {
         await client.query('BEGIN');
         transactionOpen = true;
+        await setLocalStatementTimeout(client);
 
         const findQuery = `
             SELECT resource_id, version, driver_contact,
@@ -296,6 +298,17 @@ async function allocateResource(req, res) {
             }
         }
         console.error('[allocate] Error:', err.message);
+
+        if (isDatabaseTimeoutError(err)) {
+            return sendTimeoutError(
+                res,
+                503,
+                req.traceId || randomUUID(),
+                'DB_TIMEOUT',
+                'Database query timed out while allocating a resource.'
+            );
+        }
+
         if (idempotencyClaimed && !idempotencyCompleted && !transactionCommitted) {
             try {
                 await releaseIdempotencyRecord(idempotencyKey);

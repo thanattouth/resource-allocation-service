@@ -1,4 +1,4 @@
-function sendError(res, statusCode, traceId, errorCode, message, details) {
+function sendError(res, statusCode, traceId, errorCode, message, details, metadata = {}) {
   const payload = {
     error_code: errorCode,
     message,
@@ -9,7 +9,15 @@ function sendError(res, statusCode, traceId, errorCode, message, details) {
     payload.details = details;
   }
 
+  Object.assign(payload, metadata);
+
   return res.status(statusCode).json(payload);
+}
+
+function sendTimeoutError(res, statusCode, traceId, errorCode, message, details) {
+  return sendError(res, statusCode, traceId, errorCode, message, details, {
+    retryable: true
+  });
 }
 
 function parseBoolean(value, defaultValue = false) {
@@ -42,5 +50,6 @@ function parseCoordinate(value) {
 module.exports = {
   parseBoolean,
   parseCoordinate,
-  sendError
+  sendError,
+  sendTimeoutError
 };

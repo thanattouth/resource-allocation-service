@@ -1,6 +1,7 @@
 const pool = require('../db/pool');
 const { RESOURCE_STATUSES } = require('../utils/constants');
-const { parseCoordinate, sendError } = require('../utils/http');
+const { isDatabaseTimeoutError, runInStatementTimeoutSession } = require('../utils/db');
+const { parseCoordinate, sendError, sendTimeoutError } = require('../utils/http');
 
 async function getNearbyResources(req, res) {
     const { lat, long, radius_km = 5, status } = req.query;
@@ -73,7 +74,9 @@ async function getNearbyResources(req, res) {
             ORDER BY distance_from_center_km ASC;
         `;
 
-        const result = await pool.query(query, params);
+        const result = await runInStatementTimeoutSession(pool, (client) =>
+            client.query(query, params)
+        );
         res.json({
             count: result.rowCount,
             radius_km: parseFloat(radius_km),
@@ -86,6 +89,16 @@ async function getNearbyResources(req, res) {
 
     } catch (err) {
         console.error('[nearby] Error:', err.message);
+        if (isDatabaseTimeoutError(err)) {
+            return sendTimeoutError(
+                res,
+                503,
+                req.traceId,
+                'DB_TIMEOUT',
+                'Database query timed out while searching nearby resources.'
+            );
+        }
+
         return sendError(
             res,
             500,

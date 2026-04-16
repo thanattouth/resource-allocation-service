@@ -1,9 +1,13 @@
 const pool = require('../db/pool');
-const { parseCoordinate, sendError } = require('../utils/http');
+const { parseCoordinate, sendError, sendTimeoutError } = require('../utils/http');
 const { buildRequestFingerprint } = require('../utils/idempotency');
 const { TRANSPORT_TYPES } = require('../utils/constants');
 const { validateStatusTransition } = require('../domain/resourceState');
 const { suggestNearbyShelter } = require('../clients/shelterLocatorClient');
+const {
+  isDatabaseTimeoutError,
+  runInStatementTimeoutSession
+} = require('../utils/db');
 const {
   claimIdempotencyRecord,
   completeIdempotencyRecord,
@@ -167,13 +171,15 @@ async function startTransport(req, res) {
 
     idempotencyClaimed = true;
 
-    const existingResourceResult = await pool.query(
-      `
-        SELECT resource_id, status, assigned_incident_id, version
-        FROM resources
-        WHERE resource_id = $1::uuid
-      `,
-      [resource_id]
+    const existingResourceResult = await runInStatementTimeoutSession(pool, (client) =>
+      client.query(
+        `
+          SELECT resource_id, status, assigned_incident_id, version
+          FROM resources
+          WHERE resource_id = $1::uuid
+        `,
+        [resource_id]
+      )
     );
 
     if (existingResourceResult.rowCount === 0) {
@@ -225,30 +231,32 @@ async function startTransport(req, res) {
 
     const destinationLat = shelterLookup.status === 'FOUND' ? shelterLookup.shelter.location.lat : null;
     const destinationLong = shelterLookup.status === 'FOUND' ? shelterLookup.shelter.location.long : null;
-    const updateResult = await pool.query(
-      `
-        UPDATE resources
-        SET status = 'TRANSPORTING',
-            current_location = ST_SetSRID(ST_MakePoint($2::float8, $1::float8), 4326)::geography,
-            destination_location = CASE
-              WHEN $3::float8 IS NOT NULL AND $4::float8 IS NOT NULL
-              THEN ST_SetSRID(ST_MakePoint($4::float8, $3::float8), 4326)::geography
-              ELSE destination_location
-            END,
-            last_updated_at = CURRENT_TIMESTAMP,
-            version = version + 1
-        WHERE resource_id = $5::uuid
-          AND version = $6::int
-        RETURNING resource_id, status, version, last_updated_at;
-      `,
-      [
-        latitude,
-        longitude,
-        destinationLat,
-        destinationLong,
-        resource_id,
-        Number(version)
-      ]
+    const updateResult = await runInStatementTimeoutSession(pool, (client) =>
+      client.query(
+        `
+          UPDATE resources
+          SET status = 'TRANSPORTING',
+              current_location = ST_SetSRID(ST_MakePoint($2::float8, $1::float8), 4326)::geography,
+              destination_location = CASE
+                WHEN $3::float8 IS NOT NULL AND $4::float8 IS NOT NULL
+                THEN ST_SetSRID(ST_MakePoint($4::float8, $3::float8), 4326)::geography
+                ELSE destination_location
+              END,
+              last_updated_at = CURRENT_TIMESTAMP,
+              version = version + 1
+          WHERE resource_id = $5::uuid
+            AND version = $6::int
+          RETURNING resource_id, status, version, last_updated_at;
+        `,
+        [
+          latitude,
+          longitude,
+          destinationLat,
+          destinationLong,
+          resource_id,
+          Number(version)
+        ]
+      )
     );
 
     if (updateResult.rowCount === 0) {
@@ -273,6 +281,9 @@ async function startTransport(req, res) {
       server_instruction: shelterLookup.status === 'FOUND'
         ? 'PROCEED_TO_DESTINATION'
         : 'DESTINATION_PENDING',
+      destination_pending: shelterLookup.status !== 'FOUND',
+      degraded: shelterLookup.status !== 'FOUND',
+      degraded_reason: shelterLookup.status !== 'FOUND' ? shelterLookup.reason : null,
       version: updated.version,
       last_updated_at: updated.last_updated_at,
       trace_id: req.traceId
@@ -288,6 +299,16 @@ async function startTransport(req, res) {
     return res.status(httpStatus).json(responsePayload);
   } catch (err) {
     console.error('[transport-start] Error:', err.message);
+
+    if (isDatabaseTimeoutError(err)) {
+      return sendTimeoutError(
+        res,
+        503,
+        req.traceId,
+        'DB_TIMEOUT',
+        'Database query timed out while starting transport.'
+      );
+    }
 
     if (err.code === '22P02') {
       return sendError(

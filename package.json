@@ -8,7 +8,7 @@
     "start": "node app/main.js",
     "dev": "NODE_ENV=development node app/main.js",
     "init-db": "node app/db/init-db.js",
-    "check": "node --check app/main.js && node --check app/controllers/allocateController.js && node --check app/controllers/nearbyController.js && node --check app/controllers/telemetryController.js && node --check app/controllers/transportStartController.js && node --check app/clients/shelterLocatorClient.js && node --check app/utils/dynamoIdempotency.js",
+    "check": "node --check app/main.js && node --check app/controllers/allocateController.js && node --check app/controllers/nearbyController.js && node --check app/controllers/telemetryController.js && node --check app/controllers/transportStartController.js && node --check app/clients/shelterLocatorClient.js && node --check app/utils/db.js && node --check app/utils/dynamoIdempotency.js",
     "test": "node --test"
   },
   "engines": {

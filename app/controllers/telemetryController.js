@@ -1,6 +1,7 @@
 const pool = require('../db/pool');
 const { RESOURCE_STATUSES } = require('../utils/constants');
-const { parseCoordinate, sendError } = require('../utils/http');
+const { isDatabaseTimeoutError, runInStatementTimeoutSession } = require('../utils/db');
+const { parseCoordinate, sendError, sendTimeoutError } = require('../utils/http');
 const { validateStatusTransition } = require('../domain/resourceState');
 
 async function updateTelemetry(req, res) {
@@ -71,75 +72,95 @@ async function updateTelemetry(req, res) {
     }
 
     try {
-        const existingResourceResult = await pool.query(
-            `
-                SELECT resource_id, status, assigned_incident_id, destination_location, version
-                FROM resources
-                WHERE resource_id = $1::uuid
-            `,
-            [resource_id]
-        );
-
-        if (existingResourceResult.rowCount === 0) {
-            return sendError(
-                res,
-                404,
-                req.traceId,
-                'RESOURCE_NOT_FOUND',
-                `Resource ID ${resource_id} does not exist.`
+        const outcome = await runInStatementTimeoutSession(pool, async (client) => {
+            const existingResourceResult = await client.query(
+                `
+                    SELECT resource_id, status, assigned_incident_id, destination_location, version
+                    FROM resources
+                    WHERE resource_id = $1::uuid
+                `,
+                [resource_id]
             );
+
+            if (existingResourceResult.rowCount === 0) {
+                return {
+                    type: 'ERROR',
+                    response: sendError(
+                        res,
+                        404,
+                        req.traceId,
+                        'RESOURCE_NOT_FOUND',
+                        `Resource ID ${resource_id} does not exist.`
+                    )
+                };
+            }
+
+            const currentResource = existingResourceResult.rows[0];
+            const transitionError = validateStatusTransition(currentResource, status);
+
+            if (transitionError) {
+                return {
+                    type: 'ERROR',
+                    response: sendError(
+                        res,
+                        409,
+                        req.traceId,
+                        transitionError.errorCode,
+                        transitionError.message
+                    )
+                };
+            }
+
+            const query = `
+                UPDATE resources SET
+                    status = COALESCE($1, status),
+                    current_location = CASE
+                        WHEN $2::float8 IS NOT NULL AND $3::float8 IS NOT NULL
+                        THEN ST_SetSRID(ST_MakePoint($3::float8, $2::float8), 4326)::geography
+                        ELSE current_location
+                    END,
+                    battery_level = COALESCE($4::float8, battery_level),
+                    assigned_incident_id = CASE WHEN $1 = 'AVAILABLE' THEN NULL ELSE assigned_incident_id END,
+                    destination_location = CASE WHEN $1 = 'AVAILABLE' THEN NULL ELSE destination_location END,
+                    last_updated_at = CURRENT_TIMESTAMP,
+                    version = version + 1
+                WHERE resource_id = $5::uuid AND version = $6::int
+                RETURNING resource_id, status, battery_level, version, last_updated_at;
+            `;
+
+            const result = await client.query(query, [
+                status,
+                currentLat,
+                currentLong,
+                battery,
+                resource_id,
+                Number(version)
+            ]);
+
+            if (result.rowCount === 0) {
+                return {
+                    type: 'ERROR',
+                    response: sendError(
+                        res,
+                        409,
+                        req.traceId,
+                        'VERSION_CONFLICT',
+                        'Resource version mismatch. Please fetch the latest resource state and retry.'
+                    )
+                };
+            }
+
+            return {
+                type: 'SUCCESS',
+                payload: result.rows[0]
+            };
+        });
+
+        if (outcome.type === 'ERROR') {
+            return outcome.response;
         }
 
-        const currentResource = existingResourceResult.rows[0];
-        const transitionError = validateStatusTransition(currentResource, status);
-
-        if (transitionError) {
-            return sendError(
-                res,
-                409,
-                req.traceId,
-                transitionError.errorCode,
-                transitionError.message
-            );
-        }
-
-        const query = `
-            UPDATE resources SET 
-                status = COALESCE($1, status),
-                current_location = CASE 
-                    WHEN $2::float8 IS NOT NULL AND $3::float8 IS NOT NULL 
-                    THEN ST_SetSRID(ST_MakePoint($3::float8, $2::float8), 4326)::geography 
-                    ELSE current_location 
-                END,
-                battery_level = COALESCE($4::float8, battery_level),
-                assigned_incident_id = CASE WHEN $1 = 'AVAILABLE' THEN NULL ELSE assigned_incident_id END,
-                destination_location = CASE WHEN $1 = 'AVAILABLE' THEN NULL ELSE destination_location END,
-                last_updated_at = CURRENT_TIMESTAMP,
-                version = version + 1
-            WHERE resource_id = $5::uuid AND version = $6::int 
-            RETURNING resource_id, status, battery_level, version, last_updated_at;
-        `;
-
-        const result = await pool.query(query, [
-            status,
-            currentLat,
-            currentLong,
-            battery,
-            resource_id,
-            Number(version)
-        ]);
-
-        if (result.rowCount === 0) {
-            return sendError(
-                res,
-                409,
-                req.traceId,
-                'VERSION_CONFLICT',
-                'Resource version mismatch. Please fetch the latest resource state and retry.'
-            );
-        }
-
-        const updated = result.rows[0];
+        const updated = outcome.payload;
         res.json({
             resource_id: updated.resource_id,
             status: updated.status,
@@ -151,6 +172,16 @@ async function updateTelemetry(req, res) {
 
     } catch (err) {
         console.error('[telemetry] Error:', err.message);
+        if (isDatabaseTimeoutError(err)) {
+            return sendTimeoutError(
+                res,
+                503,
+                req.traceId,
+                'DB_TIMEOUT',
+                'Database query timed out while updating telemetry.'
+            );
+        }
+
         if (err.code === '22P02') {
             return sendError(
                 res,
