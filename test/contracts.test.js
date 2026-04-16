@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const { getDbQueryTimeoutMs, isDatabaseTimeoutError } = require('../app/utils/db');
 const { sendError, sendTimeoutError } = require('../app/utils/http');
+const { isUuidResourceId } = require('../app/utils/resourceId');
 
 test('getDbQueryTimeoutMs falls back to 3000ms by default', () => {
   const original = process.env.DB_QUERY_TIMEOUT_MS;
@@ -67,4 +68,9 @@ test('sendTimeoutError marks timeout failures as retryable', () => {
   assert.equal(response.body.error_code, 'DB_TIMEOUT');
   assert.equal(response.body.retryable, true);
   assert.equal(response.body.trace_id, 'trace-456');
+});
+
+test('isUuidResourceId accepts UUIDs and rejects human-readable fleet codes', () => {
+  assert.equal(isUuidResourceId('550e8400-e29b-41d4-a716-446655440000'), true);
+  assert.equal(isUuidResourceId('RES-VAN-005'), false);
 });

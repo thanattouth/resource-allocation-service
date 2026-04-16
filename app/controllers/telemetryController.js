@@ -3,6 +3,7 @@ const { RESOURCE_STATUSES } = require('../utils/constants');
 const { isDatabaseTimeoutError, runInStatementTimeoutSession } = require('../utils/db');
 const { parseCoordinate, sendError, sendTimeoutError } = require('../utils/http');
 const { validateStatusTransition } = require('../domain/resourceState');
+const { isUuidResourceId } = require('../utils/resourceId');
 
 async function updateTelemetry(req, res) {
     const { resource_id } = req.params;
@@ -28,6 +29,16 @@ async function updateTelemetry(req, res) {
             req.traceId,
             'INVALID_RESOURCE_ID',
             'resource_id path parameter is required.'
+        );
+    }
+
+    if (!isUuidResourceId(resource_id)) {
+        return sendError(
+            res,
+            400,
+            req.traceId,
+            'INVALID_RESOURCE_ID',
+            'resource_id must be a valid UUID.'
         );
     }
 
@@ -179,16 +190,6 @@ async function updateTelemetry(req, res) {
                 req.traceId,
                 'DB_TIMEOUT',
                 'Database query timed out while updating telemetry.'
-            );
-        }
-
-        if (err.code === '22P02') {
-            return sendError(
-                res,
-                400,
-                req.traceId,
-                'INVALID_RESOURCE_ID',
-                'resource_id must be a valid UUID.'
             );
         }
 

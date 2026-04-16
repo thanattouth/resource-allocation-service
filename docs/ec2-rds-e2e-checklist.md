@@ -14,8 +14,11 @@ Use this checklist after deploying in AWS Learner Lab to confirm the app, RDS/Po
   - `DB_NAME`
   - `AWS_REGION`
   - `DYNAMODB_IDEMPOTENCY_TABLE`
+  - `DISPATCHER_BEARER_TOKEN`
+  - `TELEMETRY_BEARER_TOKEN` or `TELEMETRY_API_KEY`
 - Confirm the DynamoDB table exists and EC2 instance role can read/write it
 - Confirm PostGIS is enabled in the target database
+- Confirm all `resource_id` values are UUIDs
 
 ## Basic health
 
@@ -33,6 +36,7 @@ Expected:
 
 ```bash
 curl "http://44.210.125.19:3000/v1/resources/nearby?lat=13.7563&long=100.5018&radius_km=5"
+  -H "Authorization: Bearer ${DISPATCHER_BEARER_TOKEN}"
 ```
 
 Expected:
@@ -51,6 +55,7 @@ Checks:
 
 ```bash
 curl -X POST "http://44.210.125.19:3000/v1/incidents/INC-2026-0001/allocations" \
+  -H "Authorization: Bearer ${DISPATCHER_BEARER_TOKEN}" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: 11111111-1111-1111-1111-111111111111" \
   -d '{
@@ -83,10 +88,11 @@ Checks:
 
 ## 3. Update telemetry
 
-Use the actual `resource_id` returned from DB or from the allocation response context.
+Use the actual UUID `resource_id` returned from DB or from the allocation response context.
 
 ```bash
 curl -X PATCH "http://44.210.125.19:3000/v1/resources/<RESOURCE_UUID>/telemetry" \
+  -H "Authorization: Bearer ${TELEMETRY_BEARER_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{
     "version": 2,

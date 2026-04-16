@@ -4,6 +4,7 @@ const { buildRequestFingerprint } = require('../utils/idempotency');
 const { TRANSPORT_TYPES } = require('../utils/constants');
 const { validateStatusTransition } = require('../domain/resourceState');
 const { suggestNearbyShelter } = require('../clients/shelterLocatorClient');
+const { isUuidResourceId } = require('../utils/resourceId');
 const {
   isDatabaseTimeoutError,
   runInStatementTimeoutSession
@@ -67,6 +68,16 @@ async function startTransport(req, res) {
       req.traceId,
       'INVALID_RESOURCE_ID',
       'resource_id path parameter is required.'
+    );
+  }
+
+  if (!isUuidResourceId(resource_id)) {
+    return sendError(
+      res,
+      400,
+      req.traceId,
+      'INVALID_RESOURCE_ID',
+      'resource_id must be a valid UUID.'
     );
   }
 
@@ -307,16 +318,6 @@ async function startTransport(req, res) {
         req.traceId,
         'DB_TIMEOUT',
         'Database query timed out while starting transport.'
-      );
-    }
-
-    if (err.code === '22P02') {
-      return sendError(
-        res,
-        400,
-        req.traceId,
-        'INVALID_RESOURCE_ID',
-        'resource_id must be a valid UUID.'
       );
     }
 

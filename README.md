@@ -29,6 +29,9 @@ npm start
 - `Idempotency-Key` is currently required on allocation requests
 - `POST /v1/resources/:resource_id/transport-start` is used for `ON_SITE -> TRANSPORTING` transitions
 - Idempotency records are stored in DynamoDB via `DYNAMODB_IDEMPOTENCY_TABLE`
+- Dispatcher endpoints require `Authorization: Bearer <DISPATCHER_BEARER_TOKEN>`
+- Telemetry endpoint requires either `Authorization: Bearer <TELEMETRY_BEARER_TOKEN>` or `Authorization: <TELEMETRY_API_KEY>`
+- `resource_id` is locked to UUID format across the service contract and runtime validation
 
 ## Out of Scope
 

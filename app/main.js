@@ -7,6 +7,10 @@ const allocateResource   = require('./controllers/allocateController');
 const startTransport     = require('./controllers/transportStartController');
 const updateTelemetry    = require('./controllers/telemetryController');
 const requestContext = require('./middleware/requestContext');
+const {
+    requireDispatcherAuth,
+    requireTelemetryAuth
+} = require('./middleware/auth');
 const { sendError } = require('./utils/http');
 
 app.use(express.json());
@@ -18,10 +22,10 @@ app.get('/health', (req, res) => {
 });
 
 // Routes
-app.get('/v1/resources/nearby',                   getNearbyResources);
-app.post('/v1/incidents/:incident_id/allocations', allocateResource);
-app.post('/v1/resources/:resource_id/transport-start', startTransport);
-app.patch('/v1/resources/:resource_id/telemetry',  updateTelemetry);
+app.get('/v1/resources/nearby', requireDispatcherAuth, getNearbyResources);
+app.post('/v1/incidents/:incident_id/allocations', requireDispatcherAuth, allocateResource);
+app.post('/v1/resources/:resource_id/transport-start', requireDispatcherAuth, startTransport);
+app.patch('/v1/resources/:resource_id/telemetry', requireTelemetryAuth, updateTelemetry);
 
 // Global error handler
 app.use((err, req, res, next) => {
