@@ -58,4 +58,5 @@ This service may consume destination recommendations from downstream services fo
 - [Sync Call Policy](/Users/hamin/Documents/CS366/ResourceAllocationService/docs/sync-call-policy.md)
 - [Self-Review vs Implementation Notes](/Users/hamin/Documents/CS366/ResourceAllocationService/docs/self-review-implementation-notes.md)
 - [Infra Bootstrap](/Users/hamin/Documents/CS366/ResourceAllocationService/infra/README.md)
+- [PowerGrid Consumer Guide](/Users/hamin/Documents/CS366/ResourceAllocationService/docs/powergrid-consumer-guide.md)
 - EC2 to RDS validation should cover `GET /v1/resources/nearby`, `POST /v1/incidents/:incident_id/allocations`, `POST /v1/resources/:resource_id/transport-start`, and `PATCH /v1/resources/:resource_id/telemetry`
