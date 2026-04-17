@@ -5,6 +5,7 @@ This directory provisions the lowest-cost first phase of the AWS Learner Lab dep
 - ECR repository for the application image
 - EC2 host for the always-on application container
 - DynamoDB table for idempotency records
+- SQS standard queues + DLQs for async publishing
 - Security group access from the EC2 host to an existing RDS instance
 
 The existing RDS database is reused instead of recreated.
@@ -38,6 +39,7 @@ The existing RDS database is reused instead of recreated.
 1. Apply infrastructure to create ECR, EC2, IAM, DynamoDB, and security rules.
 2. Build and push the Docker image to the new ECR repository.
 3. SSH into EC2 or use SSM and rerun the Docker pull/run commands if the image was not available during the first boot.
+4. Verify SQS URLs are present in `/opt/resource-allocation/.env` on EC2.
 
 ## Notes
 
@@ -45,4 +47,9 @@ The existing RDS database is reused instead of recreated.
 - The EC2 host is pinned to `us-east-1a` to avoid unsupported instance-type issues in some default subnets.
 - IAM resources are intentionally reused from Learner Lab instead of being created by OpenTofu.
 - The EC2 user-data writes application environment variables locally on the instance.
-- The current app must still be updated to use DynamoDB for idempotency at runtime; this infra only prepares the cloud resources.
+- SQS is configured as Standard queues (lowest-cost, at-least-once delivery) with per-channel DLQ and `maxReceiveCount = 5`.
+- After `tofu apply`, use `tofu output` to inspect:
+  - `sqs_powergrid_eta_updated_url`
+  - `sqs_powergrid_eta_updated_dlq_url`
+  - `sqs_shelter_transporting_url`
+  - `sqs_shelter_transporting_dlq_url`

@@ -68,6 +68,56 @@ resource "aws_dynamodb_table" "idempotency" {
   }
 }
 
+resource "aws_sqs_queue" "powergrid_eta_dlq" {
+  name = var.powergrid_eta_dlq_name
+
+  tags = {
+    Name        = var.powergrid_eta_dlq_name
+    Project     = var.project_name
+    Environment = var.environment
+  }
+}
+
+resource "aws_sqs_queue" "powergrid_eta" {
+  name                       = var.powergrid_eta_queue_name
+  visibility_timeout_seconds = 30
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.powergrid_eta_dlq.arn
+    maxReceiveCount     = 5
+  })
+
+  tags = {
+    Name        = var.powergrid_eta_queue_name
+    Project     = var.project_name
+    Environment = var.environment
+  }
+}
+
+resource "aws_sqs_queue" "shelter_transporting_dlq" {
+  name = var.shelter_transporting_dlq_name
+
+  tags = {
+    Name        = var.shelter_transporting_dlq_name
+    Project     = var.project_name
+    Environment = var.environment
+  }
+}
+
+resource "aws_sqs_queue" "shelter_transporting" {
+  name                       = var.shelter_transporting_queue_name
+  visibility_timeout_seconds = 30
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.shelter_transporting_dlq.arn
+    maxReceiveCount     = 5
+  })
+
+  tags = {
+    Name        = var.shelter_transporting_queue_name
+    Project     = var.project_name
+    Environment = var.environment
+  }
+}
+
 resource "aws_security_group" "ec2_app" {
   name        = "${local.name_prefix}-ec2-sg"
   description = "Security group for Resource Allocation EC2 host"
@@ -141,15 +191,17 @@ resource "aws_instance" "app" {
   key_name                    = aws_key_pair.ec2_app.key_name
 
   user_data = templatefile("${path.module}/templates/ec2-user-data.sh.tftpl", {
-    aws_region          = var.aws_region
-    app_port            = var.app_port
-    db_host             = var.existing_rds_host
-    db_port             = var.existing_rds_port
-    db_name             = var.existing_rds_name
-    db_user             = var.existing_rds_username
-    db_password         = var.existing_rds_password
-    dynamodb_table_name = aws_dynamodb_table.idempotency.name
-    image_uri           = local.container_image_uri
+    aws_region                    = var.aws_region
+    app_port                      = var.app_port
+    db_host                       = var.existing_rds_host
+    db_port                       = var.existing_rds_port
+    db_name                       = var.existing_rds_name
+    db_user                       = var.existing_rds_username
+    db_password                   = var.existing_rds_password
+    dynamodb_table_name           = aws_dynamodb_table.idempotency.name
+    sqs_powergrid_eta_updated_url = aws_sqs_queue.powergrid_eta.url
+    sqs_shelter_transporting_url  = aws_sqs_queue.shelter_transporting.url
+    image_uri                     = local.container_image_uri
   })
 
   tags = {

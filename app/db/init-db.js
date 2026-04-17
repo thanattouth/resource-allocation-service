@@ -1,4 +1,5 @@
 const { Client } = require('pg');
+require('dotenv').config();
 
 const client = new Client({
     host: process.env.DB_HOST,
@@ -25,6 +26,9 @@ async function setupDatabase() {
                 status              VARCHAR(20) DEFAULT 'AVAILABLE',
                 current_location    GEOGRAPHY(Point, 4326),
                 destination_location GEOGRAPHY(Point, 4326),
+                destination_type    VARCHAR(50),
+                destination_id      VARCHAR(100),
+                destination_name    VARCHAR(255),
                 assigned_incident_id VARCHAR(50),
                 battery_level       FLOAT DEFAULT 100.0,
                 capabilities        JSONB DEFAULT '[]',
@@ -36,6 +40,11 @@ async function setupDatabase() {
             CREATE INDEX IF NOT EXISTS idx_resources_location ON resources USING GIST(current_location);
         `;
         await client.query(createTableQuery);
+        await client.query(`
+            ALTER TABLE resources ADD COLUMN IF NOT EXISTS destination_type VARCHAR(50);
+            ALTER TABLE resources ADD COLUMN IF NOT EXISTS destination_id VARCHAR(100);
+            ALTER TABLE resources ADD COLUMN IF NOT EXISTS destination_name VARCHAR(255);
+        `);
         console.log("[init-db] Table 'resources' created successfully!");
 
         const seedQuery = `

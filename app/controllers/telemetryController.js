@@ -2,6 +2,12 @@ const pool = require('../db/pool');
 const { RESOURCE_STATUSES } = require('../utils/constants');
 const { isDatabaseTimeoutError, runInStatementTimeoutSession } = require('../utils/db');
 const { parseCoordinate, sendError, sendTimeoutError } = require('../utils/http');
+const {
+    calculateDistanceKm,
+    calculateEstimatedArrivalTimeMinutes,
+    shouldPublishEtaUpdate
+} = require('../domain/allocation');
+const { publishPowerGridEtaUpdatedEvent } = require('../utils/eventPublisher');
 const { validateStatusTransition } = require('../domain/resourceState');
 const { isUuidResourceId } = require('../utils/resourceId');
 
@@ -86,7 +92,22 @@ async function updateTelemetry(req, res) {
         const outcome = await runInStatementTimeoutSession(pool, async (client) => {
             const existingResourceResult = await client.query(
                 `
-                    SELECT resource_id, status, assigned_incident_id, destination_location, version
+                    SELECT resource_id, status, assigned_incident_id, destination_location, version,
+                           destination_type, destination_id, destination_name, resource_type,
+                           CASE
+                               WHEN current_location IS NOT NULL THEN json_build_object(
+                                   'lat', ST_Y(current_location::geometry),
+                                   'long', ST_X(current_location::geometry)
+                               )
+                               ELSE NULL
+                           END AS current_location_point,
+                           CASE
+                               WHEN destination_location IS NOT NULL THEN json_build_object(
+                                   'lat', ST_Y(destination_location::geometry),
+                                   'long', ST_X(destination_location::geometry)
+                               )
+                               ELSE NULL
+                           END AS destination_location_point
                     FROM resources
                     WHERE resource_id = $1::uuid
                 `,
@@ -133,10 +154,29 @@ async function updateTelemetry(req, res) {
                     battery_level = COALESCE($4::float8, battery_level),
                     assigned_incident_id = CASE WHEN $1 = 'AVAILABLE' THEN NULL ELSE assigned_incident_id END,
                     destination_location = CASE WHEN $1 = 'AVAILABLE' THEN NULL ELSE destination_location END,
+                    destination_type = CASE WHEN $1 = 'AVAILABLE' THEN NULL ELSE destination_type END,
+                    destination_id = CASE WHEN $1 = 'AVAILABLE' THEN NULL ELSE destination_id END,
+                    destination_name = CASE WHEN $1 = 'AVAILABLE' THEN NULL ELSE destination_name END,
                     last_updated_at = CURRENT_TIMESTAMP,
                     version = version + 1
                 WHERE resource_id = $5::uuid AND version = $6::int
-                RETURNING resource_id, status, battery_level, version, last_updated_at;
+                RETURNING resource_id, status, battery_level, version, last_updated_at,
+                          assigned_incident_id, destination_type, destination_id, destination_name,
+                          resource_type,
+                          CASE
+                              WHEN current_location IS NOT NULL THEN json_build_object(
+                                  'lat', ST_Y(current_location::geometry),
+                                  'long', ST_X(current_location::geometry)
+                              )
+                              ELSE NULL
+                          END AS current_location_point,
+                          CASE
+                              WHEN destination_location IS NOT NULL THEN json_build_object(
+                                  'lat', ST_Y(destination_location::geometry),
+                                  'long', ST_X(destination_location::geometry)
+                              )
+                              ELSE NULL
+                          END AS destination_location_point;
             `;
 
             const result = await client.query(query, [
@@ -163,7 +203,8 @@ async function updateTelemetry(req, res) {
 
             return {
                 type: 'SUCCESS',
-                payload: result.rows[0]
+                payload: result.rows[0],
+                previousResource: currentResource
             };
         });
 
@@ -172,6 +213,48 @@ async function updateTelemetry(req, res) {
         }
 
         const updated = outcome.payload;
+        const shouldEvaluatePowerGridEta =
+            updated.status === 'EN_ROUTE' &&
+            updated.destination_type === 'POWER_NODE' &&
+            updated.destination_id &&
+            updated.destination_location_point;
+
+        if (shouldEvaluatePowerGridEta) {
+            const previousDistanceKm = calculateDistanceKm(
+                outcome.previousResource?.current_location_point,
+                outcome.previousResource?.destination_location_point
+            );
+            const nextDistanceKm = calculateDistanceKm(
+                updated.current_location_point,
+                updated.destination_location_point
+            );
+            const previousEtaMinutes = calculateEstimatedArrivalTimeMinutes(previousDistanceKm);
+            const nextEtaMinutes = calculateEstimatedArrivalTimeMinutes(nextDistanceKm);
+
+            if (shouldPublishEtaUpdate(previousEtaMinutes, nextEtaMinutes)) {
+                try {
+                    await publishPowerGridEtaUpdatedEvent(
+                        {
+                            incidentId: updated.assigned_incident_id,
+                            allocationId: null,
+                            resourceId: updated.resource_id,
+                            resourceType: updated.resource_type,
+                            destination: {
+                                destination_type: updated.destination_type,
+                                destination_id: updated.destination_id,
+                                destination_name: updated.destination_name || undefined
+                            },
+                            status: updated.status,
+                            etaMinutes: nextEtaMinutes
+                        },
+                        { traceId: req.traceId }
+                    );
+                } catch (publishError) {
+                    console.error('[telemetry] Failed to publish powergrid ETA event:', publishError.message);
+                }
+            }
+        }
+
         res.json({
             resource_id: updated.resource_id,
             status: updated.status,

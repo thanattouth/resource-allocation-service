@@ -2,7 +2,10 @@ const pool = require('../db/pool');
 const { parseCoordinate, sendError, sendTimeoutError } = require('../utils/http');
 const { buildRequestFingerprint } = require('../utils/idempotency');
 const { TRANSPORT_TYPES } = require('../utils/constants');
-const { calculateEstimatedArrivalTimeMinutes } = require('../domain/allocation');
+const {
+  calculateDistanceKm,
+  calculateEstimatedArrivalTimeMinutes
+} = require('../domain/allocation');
 const { validateStatusTransition } = require('../domain/resourceState');
 const { suggestNearbyShelter } = require('../clients/shelterLocatorClient');
 const { isUuidResourceId } = require('../utils/resourceId');
@@ -18,29 +21,6 @@ const {
   completeIdempotencyRecord,
   releaseIdempotencyRecord
 } = require('../utils/dynamoIdempotency');
-
-function calculateDistanceKm(origin, destination) {
-  if (!origin || !destination) {
-    return null;
-  }
-
-  const lat1 = Number(origin.lat);
-  const lon1 = Number(origin.long);
-  const lat2 = Number(destination.lat);
-  const lon2 = Number(destination.long);
-  if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) {
-    return null;
-  }
-
-  const toRadians = (degrees) => (degrees * Math.PI) / 180;
-  const dLat = toRadians(lat2 - lat1);
-  const dLon = toRadians(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLon / 2) ** 2;
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return 6371 * c;
-}
 
 function buildDestinationResponse(shelter) {
   if (!shelter) {
@@ -280,6 +260,18 @@ async function startTransport(req, res) {
                 THEN ST_SetSRID(ST_MakePoint($4::float8, $3::float8), 4326)::geography
                 ELSE destination_location
               END,
+              destination_type = CASE
+                WHEN $7::text IS NOT NULL THEN $7
+                ELSE destination_type
+              END,
+              destination_id = CASE
+                WHEN $8::text IS NOT NULL THEN $8
+                ELSE destination_id
+              END,
+              destination_name = CASE
+                WHEN $9::text IS NOT NULL THEN $9
+                ELSE destination_name
+              END,
               last_updated_at = CURRENT_TIMESTAMP,
               version = version + 1
           WHERE resource_id = $5::uuid
@@ -292,7 +284,10 @@ async function startTransport(req, res) {
           destinationLat,
           destinationLong,
           resource_id,
-          Number(version)
+          Number(version),
+          shelterLookup.status === 'FOUND' ? 'SHELTER' : null,
+          shelterLookup.status === 'FOUND' ? shelterLookup.shelter.shelter_id : null,
+          shelterLookup.status === 'FOUND' ? shelterLookup.shelter.name : null
         ]
       )
     );

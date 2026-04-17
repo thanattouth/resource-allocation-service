@@ -27,3 +27,23 @@ output "container_image_uri" {
   description = "Expected image URI that EC2 user-data tries to pull."
   value       = local.container_image_uri
 }
+
+output "sqs_powergrid_eta_updated_url" {
+  description = "SQS URL for resource.events.powergrid_eta_updated."
+  value       = aws_sqs_queue.powergrid_eta.url
+}
+
+output "sqs_powergrid_eta_updated_dlq_url" {
+  description = "SQS DLQ URL for resource.events.powergrid_eta_updated."
+  value       = aws_sqs_queue.powergrid_eta_dlq.url
+}
+
+output "sqs_shelter_transporting_url" {
+  description = "SQS URL for resource.events.shelter_transporting."
+  value       = aws_sqs_queue.shelter_transporting.url
+}
+
+output "sqs_shelter_transporting_dlq_url" {
+  description = "SQS DLQ URL for resource.events.shelter_transporting."
+  value       = aws_sqs_queue.shelter_transporting_dlq.url
+}

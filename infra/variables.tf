@@ -112,3 +112,27 @@ variable "app_port" {
   type        = number
   default     = 3000
 }
+
+variable "powergrid_eta_queue_name" {
+  description = "SQS queue name for resource.events.powergrid_eta_updated."
+  type        = string
+  default     = "resource-events-powergrid-eta-updated"
+}
+
+variable "powergrid_eta_dlq_name" {
+  description = "SQS dead-letter queue name for powergrid ETA events."
+  type        = string
+  default     = "resource-events-powergrid-eta-updated-dlq"
+}
+
+variable "shelter_transporting_queue_name" {
+  description = "SQS queue name for resource.events.shelter_transporting."
+  type        = string
+  default     = "resource-events-shelter-transporting"
+}
+
+variable "shelter_transporting_dlq_name" {
+  description = "SQS dead-letter queue name for shelter transporting events."
+  type        = string
+  default     = "resource-events-shelter-transporting-dlq"
+}

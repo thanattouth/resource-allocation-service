@@ -23,6 +23,8 @@ DB_POOL_MAX=10
 AWS_REGION=${aws_region}
 DYNAMODB_IDEMPOTENCY_TABLE=${dynamodb_table_name}
 IDEMPOTENCY_TTL_HOURS=24
+SQS_POWERGRID_ETA_UPDATED_URL=${sqs_powergrid_eta_updated_url}
+SQS_SHELTER_TRANSPORTING_URL=${sqs_shelter_transporting_url}
 EOF
 
 aws ecr get-login-password --region ${aws_region} | docker login --username AWS --password-stdin $(echo ${image_uri} | cut -d/ -f1)

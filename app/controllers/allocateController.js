@@ -281,14 +281,20 @@ async function allocateResource(req, res) {
             SET status = 'EN_ROUTE',
                 assigned_incident_id = $1,
                 version = version + 1,
-                destination_location = ST_SetSRID(ST_MakePoint($3, $2), 4326)::geography
-            WHERE resource_id = $4 AND version = $5
+                destination_location = ST_SetSRID(ST_MakePoint($3, $2), 4326)::geography,
+                destination_type = $4,
+                destination_id = $5,
+                destination_name = $6
+            WHERE resource_id = $7 AND version = $8
             RETURNING *;
         `;
         const updateRes = await client.query(updateQuery, [
             incident_id,
             destinationLatitude,
             destinationLongitude,
+            destination.destination_type,
+            destination.destination_id,
+            destination.destination_name || null,
             resrc.resource_id,
             resrc.version
         ]);

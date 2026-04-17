@@ -21,3 +21,8 @@ existing_rds_security_group_id = "sg-xxxxxxxx"
 dynamodb_table_name           = "resource-allocation-idempotency"
 idempotency_ttl_hours         = 24
 app_port                      = 3000
+
+powergrid_eta_queue_name      = "resource-events-powergrid-eta-updated"
+powergrid_eta_dlq_name        = "resource-events-powergrid-eta-updated-dlq"
+shelter_transporting_queue_name = "resource-events-shelter-transporting"
+shelter_transporting_dlq_name = "resource-events-shelter-transporting-dlq"
