@@ -5,8 +5,11 @@ const request = require('supertest');
 const { app } = require('../app/main');
 
 const DISPATCHER_AUTH = 'Bearer dispatcher-dev-token';
+const ALLOCATION_API_KEY_AUTH = 'ApiKey allocation-upstream-key';
 const TELEMETRY_AUTH = 'Bearer telemetry-device-token';
 const SAMPLE_RESOURCE_UUID = '550e8400-e29b-41d4-a716-446655440000';
+
+process.env.ALLOCATION_API_KEY = 'allocation-upstream-key';
 
 test('GET /health returns status and trace_id', async () => {
   const response = await request(app).get('/health');
@@ -41,6 +44,25 @@ test('POST /v1/incidents/:incident_id/allocations requires Idempotency-Key', asy
     .set('Authorization', DISPATCHER_AUTH)
     .send({
       incident_location: { lat: 13.7563, long: 100.5018 },
+      required_resource_type: 'AMBULANCE_VAN',
+      required_capabilities: ['AED']
+    });
+
+  assert.equal(response.statusCode, 400);
+  assert.equal(response.body.error_code, 'MISSING_IDEMPOTENCY_KEY');
+});
+
+test('POST /v1/incidents/:incident_id/allocations accepts ApiKey auth', async () => {
+  const response = await request(app)
+    .post('/v1/incidents/INC-2024-0801/allocations')
+    .set('Authorization', ALLOCATION_API_KEY_AUTH)
+    .send({
+      incident_location: { lat: 13.7563, long: 100.5018 },
+      destination: {
+        destination_type: 'POWER_NODE',
+        destination_id: 'NODE-77',
+        location: { lat: 13.7601, long: 100.5102 }
+      },
       required_resource_type: 'AMBULANCE_VAN',
       required_capabilities: ['AED']
     });

@@ -13,6 +13,10 @@ const DEFAULT_TTL_HOURS = 24;
 
 let documentClient;
 
+function toStorageSafeJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
 function getTableName() {
   const tableName = process.env.DYNAMODB_IDEMPOTENCY_TABLE;
   if (!tableName) {
@@ -97,6 +101,7 @@ async function completeIdempotencyRecord({ idempotencyKey, allocationId, respons
   const client = getClient();
   const tableName = getTableName();
   const now = new Date().toISOString();
+  const storageSafePayload = toStorageSafeJson(responsePayload);
 
   await client.send(new UpdateCommand({
     TableName: tableName,
@@ -112,7 +117,7 @@ async function completeIdempotencyRecord({ idempotencyKey, allocationId, respons
     },
     ExpressionAttributeValues: {
       ':allocationId': allocationId || null,
-      ':responsePayload': responsePayload,
+      ':responsePayload': storageSafePayload,
       ':completed': 'COMPLETED',
       ':updatedAt': now
     }

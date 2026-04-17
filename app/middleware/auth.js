@@ -50,6 +50,40 @@ function requireDispatcherAuth(req, res, next) {
   return next();
 }
 
+function requireAllocationAuth(req, res, next) {
+  const authorization = req.get('Authorization');
+  const expectedBearer = getExpectedToken('DISPATCHER_BEARER_TOKEN', 'dispatcher-dev-token');
+  const expectedApiKey = getExpectedToken('ALLOCATION_API_KEY', '');
+
+  if (!authorization) {
+    return sendError(
+      res,
+      401,
+      req.traceId,
+      'AUTHORIZATION_REQUIRED',
+      'Authorization header is required.'
+    );
+  }
+
+  if (matchesBearerToken(authorization, expectedBearer)) {
+    req.auth = { actor: 'dispatcher', scheme: 'Bearer' };
+    return next();
+  }
+
+  if (matchesApiKey(authorization, expectedApiKey)) {
+    req.auth = { actor: 'upstream-service', scheme: 'ApiKey' };
+    return next();
+  }
+
+  return sendError(
+    res,
+    401,
+    req.traceId,
+    'INVALID_AUTHORIZATION',
+    'Authorization token is invalid for allocation access.'
+  );
+}
+
 function requireTelemetryAuth(req, res, next) {
   const authorization = req.get('Authorization');
   const expectedBearer = getExpectedToken('TELEMETRY_BEARER_TOKEN', 'telemetry-device-token');
@@ -85,6 +119,7 @@ function requireTelemetryAuth(req, res, next) {
 }
 
 module.exports = {
+  requireAllocationAuth,
   requireDispatcherAuth,
   requireTelemetryAuth
 };

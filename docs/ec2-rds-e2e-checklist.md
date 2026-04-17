@@ -2,6 +2,12 @@
 
 Use this checklist after deploying in AWS Learner Lab to confirm the app, RDS/PostGIS, and DynamoDB idempotency path are all working together.
 
+Quick run option:
+
+```bash
+DISPATCHER_BEARER_TOKEN=... TELEMETRY_BEARER_TOKEN=... BASE_URL=http://<ec2-public-ip>:3000 npm run test:e2e:sync
+```
+
 ## Before testing
 
 - Confirm EC2 is running and the app container is up
@@ -23,7 +29,7 @@ Use this checklist after deploying in AWS Learner Lab to confirm the app, RDS/Po
 ## Basic health
 
 ```bash
-curl http://44.210.125.19:3000/health
+curl http://44.201.248.113:3000/health
 ```
 
 Expected:
@@ -35,7 +41,7 @@ Expected:
 ## 1. Search nearby resources
 
 ```bash
-curl "http://44.210.125.19:3000/v1/resources/nearby?lat=13.7563&long=100.5018&radius_km=5"
+curl "http://44.201.248.113:3000/v1/resources/nearby?lat=13.7563&long=100.5018&radius_km=5"
   -H "Authorization: Bearer ${DISPATCHER_BEARER_TOKEN}"
 ```
 
@@ -54,12 +60,17 @@ Checks:
 ## 2. Allocate resource with DynamoDB idempotency
 
 ```bash
-curl -X POST "http://44.210.125.19:3000/v1/incidents/INC-2026-0001/allocations" \
+curl -X POST "http://44.201.248.113:3000/v1/incidents/INC-2026-0001/allocations" \
   -H "Authorization: Bearer ${DISPATCHER_BEARER_TOKEN}" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: 11111111-1111-1111-1111-111111111111" \
   -d '{
     "incident_location": { "lat": 13.7563, "long": 100.5018 },
+    "destination": {
+      "destination_type": "POWER_NODE",
+      "destination_id": "NODE-77",
+      "location": { "lat": 13.7601, "long": 100.5102 }
+    },
     "severity": "HIGH",
     "required_resource_type": "AMBULANCE_VAN",
     "required_capabilities": ["AED"]
@@ -71,6 +82,7 @@ Expected:
 - HTTP `201`
 - `allocation_id` returned
 - `status` is `ASSIGNED`
+- `destination` returned and matches request
 - `trace_id` present
 
 Then send the exact same request again with the same `Idempotency-Key`.
@@ -91,7 +103,7 @@ Checks:
 Use the actual UUID `resource_id` returned from DB or from the allocation response context.
 
 ```bash
-curl -X PATCH "http://44.210.125.19:3000/v1/resources/<RESOURCE_UUID>/telemetry" \
+curl -X PATCH "http://44.201.248.113:3000/v1/resources/<RESOURCE_UUID>/telemetry" \
   -H "Authorization: Bearer ${TELEMETRY_BEARER_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -114,10 +126,47 @@ Checks:
 - optimistic locking works
 - resource state persists in RDS
 
+## 4. Close-out flows (mission completed)
+
+After `transport-start`, close evacuation by returning resource to `AVAILABLE`:
+
+```bash
+curl -X PATCH "http://44.201.248.113:3000/v1/resources/<RESOURCE_UUID>/telemetry" \
+  -H "Authorization: Bearer ${TELEMETRY_BEARER_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "version": <LATEST_VERSION_AFTER_TRANSPORT>,
+    "status": "AVAILABLE",
+    "current_location": { "lat": 13.7590, "long": 100.4850 },
+    "battery_level": 80
+  }'
+```
+
+For general missions (for example generator delivery), close directly after `ON_SITE`:
+
+```bash
+curl -X PATCH "http://44.201.248.113:3000/v1/resources/<RESOURCE_UUID>/telemetry" \
+  -H "Authorization: Bearer ${TELEMETRY_BEARER_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "version": <LATEST_VERSION_AFTER_ON_SITE>,
+    "status": "AVAILABLE",
+    "current_location": { "lat": 13.7611, "long": 100.5122 },
+    "battery_level": 68
+  }'
+```
+
+Expected:
+
+- HTTP `200`
+- `status` becomes `AVAILABLE`
+- `assigned_incident_id` is cleared in DB
+- `destination_location` is cleared in DB
+
 ## Optional validation in AWS
 
 - Inspect DynamoDB table item for the test `Idempotency-Key`
-- Inspect the `resources` row in RDS after allocation and telemetry update
+- Inspect the `resources` row in RDS after allocation, transport/general mission, and close-out
 - Confirm CloudWatch or container logs show no DB or DynamoDB errors
 
 ## Known follow-up after this checklist

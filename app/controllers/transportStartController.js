@@ -2,9 +2,13 @@ const pool = require('../db/pool');
 const { parseCoordinate, sendError, sendTimeoutError } = require('../utils/http');
 const { buildRequestFingerprint } = require('../utils/idempotency');
 const { TRANSPORT_TYPES } = require('../utils/constants');
+const { calculateEstimatedArrivalTimeMinutes } = require('../domain/allocation');
 const { validateStatusTransition } = require('../domain/resourceState');
 const { suggestNearbyShelter } = require('../clients/shelterLocatorClient');
 const { isUuidResourceId } = require('../utils/resourceId');
+const {
+  publishShelterTransportingEvent
+} = require('../utils/eventPublisher');
 const {
   isDatabaseTimeoutError,
   runInStatementTimeoutSession
@@ -14,6 +18,29 @@ const {
   completeIdempotencyRecord,
   releaseIdempotencyRecord
 } = require('../utils/dynamoIdempotency');
+
+function calculateDistanceKm(origin, destination) {
+  if (!origin || !destination) {
+    return null;
+  }
+
+  const lat1 = Number(origin.lat);
+  const lon1 = Number(origin.long);
+  const lat2 = Number(destination.lat);
+  const lon2 = Number(destination.long);
+  if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) {
+    return null;
+  }
+
+  const toRadians = (degrees) => (degrees * Math.PI) / 180;
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLon / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return 6371 * c;
+}
 
 function buildDestinationResponse(shelter) {
   if (!shelter) {
@@ -185,7 +212,7 @@ async function startTransport(req, res) {
     const existingResourceResult = await runInStatementTimeoutSession(pool, (client) =>
       client.query(
         `
-          SELECT resource_id, status, assigned_incident_id, version
+          SELECT resource_id, status, assigned_incident_id, version, resource_type
           FROM resources
           WHERE resource_id = $1::uuid
         `,
@@ -307,6 +334,32 @@ async function startTransport(req, res) {
       responsePayload
     });
     idempotencyCompleted = true;
+
+    if (responsePayload.destination && responsePayload.destination.destination_type === 'SHELTER') {
+      const estimatedDistanceKm = calculateDistanceKm(
+        current_location,
+        responsePayload.destination.location
+      );
+      const etaMinutes = calculateEstimatedArrivalTimeMinutes(estimatedDistanceKm);
+      try {
+        await publishShelterTransportingEvent(
+          {
+            incidentId: responsePayload.incident_id,
+            allocationId: null,
+            resourceId: responsePayload.resource_id,
+            resourceType: currentResource.resource_type,
+            destination: responsePayload.destination,
+            status: responsePayload.status,
+            passengerCount: passenger_count,
+            etaMinutes: etaMinutes || 1
+          },
+          { traceId: req.traceId }
+        );
+      } catch (publishError) {
+        console.error('[transport-start] Failed to publish shelter transporting event:', publishError.message);
+      }
+    }
+
     return res.status(httpStatus).json(responsePayload);
   } catch (err) {
     console.error('[transport-start] Error:', err.message);

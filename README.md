@@ -29,7 +29,10 @@ npm start
 - `Idempotency-Key` is currently required on allocation requests
 - `POST /v1/resources/:resource_id/transport-start` is used for `ON_SITE -> TRANSPORTING` transitions
 - Idempotency records are stored in DynamoDB via `DYNAMODB_IDEMPOTENCY_TABLE`
-- Dispatcher endpoints require `Authorization: Bearer <DISPATCHER_BEARER_TOKEN>`
+- Allocation publish path supports SQS async event `resource.events.powergrid_eta_updated` via `SQS_POWERGRID_ETA_UPDATED_URL`
+- Transport start publish path supports SQS async event `resource.events.shelter_transporting` via `SQS_SHELTER_TRANSPORTING_URL`
+- Allocation endpoint accepts either `Authorization: Bearer <DISPATCHER_BEARER_TOKEN>` or `Authorization: ApiKey <ALLOCATION_API_KEY>`
+- Nearby and transport-start endpoints require `Authorization: Bearer <DISPATCHER_BEARER_TOKEN>`
 - Telemetry endpoint requires either `Authorization: Bearer <TELEMETRY_BEARER_TOKEN>` or `Authorization: <TELEMETRY_API_KEY>`
 - `resource_id` is locked to UUID format across the service contract and runtime validation
 

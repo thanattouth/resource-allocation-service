@@ -5,6 +5,7 @@ const { isDatabaseTimeoutError, setLocalStatementTimeout } = require('../utils/d
 const { parseBoolean, parseCoordinate, sendError, sendTimeoutError } = require('../utils/http');
 const { calculateEstimatedArrivalTimeMinutes } = require('../domain/allocation');
 const { buildRequestFingerprint } = require('../utils/idempotency');
+const { publishPowerGridEtaUpdatedEvent } = require('../utils/eventPublisher');
 const {
     claimIdempotencyRecord,
     completeIdempotencyRecord,
@@ -17,7 +18,9 @@ function buildAllocationResponse({
     requiredResourceType,
     resourceId,
     driverContact,
+    destination,
     distanceKm,
+    version,
     traceId,
     dryRun = false
 }) {
@@ -33,23 +36,34 @@ function buildAllocationResponse({
             resource_type: requiredResourceType,
             driver_contact: driverContact
         },
+        destination,
         estimated_arrival_time_mins: calculateEstimatedArrivalTimeMinutes(roundedDistanceKm),
         distance_km: roundedDistanceKm,
+        version: Number.isInteger(Number(version)) ? Number(version) : undefined,
         trace_id: traceId
     };
 }
 
 async function allocateResource(req, res) {
     const { incident_id } = req.params;
-    const { incident_location, required_resource_type, required_capabilities = [], severity = 'MEDIUM' } = req.body;
+    const {
+        incident_location,
+        destination,
+        required_resource_type,
+        required_capabilities = [],
+        severity = 'MEDIUM'
+    } = req.body;
     const idempotencyKey = req.get('Idempotency-Key');
     const dryRun = parseBoolean(req.query.dry_run, false);
-    const latitude = parseCoordinate(incident_location?.lat);
-    const longitude = parseCoordinate(incident_location?.long);
+    const destinationLatitude = parseCoordinate(destination?.location?.lat);
+    const destinationLongitude = parseCoordinate(destination?.location?.long);
+    const latitude = parseCoordinate(incident_location?.lat ?? destination?.location?.lat);
+    const longitude = parseCoordinate(incident_location?.long ?? destination?.location?.long);
     const requestFingerprint = buildRequestFingerprint({
         incident_id,
         dry_run: dryRun,
         incident_location,
+        destination,
         required_resource_type,
         required_capabilities,
         severity
@@ -81,7 +95,34 @@ async function allocateResource(req, res) {
             400,
             req.traceId,
             'INVALID_INCIDENT_LOCATION',
-            'incident_location.lat and incident_location.long must be valid coordinates.'
+            'incident_location.lat and incident_location.long must be valid coordinates (or fallback to destination.location).'
+        );
+    }
+
+    if (!destination || !destination.destination_type || !destination.destination_id) {
+        return sendError(
+            res,
+            400,
+            req.traceId,
+            'INVALID_DESTINATION',
+            'destination.destination_type and destination.destination_id are required.'
+        );
+    }
+
+    if (
+        destinationLatitude === null ||
+        destinationLongitude === null ||
+        destinationLatitude < -90 ||
+        destinationLatitude > 90 ||
+        destinationLongitude < -180 ||
+        destinationLongitude > 180
+    ) {
+        return sendError(
+            res,
+            400,
+            req.traceId,
+            'INVALID_DESTINATION_LOCATION',
+            'destination.location.lat and destination.location.long must be valid coordinates.'
         );
     }
 
@@ -216,7 +257,9 @@ async function allocateResource(req, res) {
                 requiredResourceType: required_resource_type,
                 resourceId: resrc.resource_id,
                 driverContact: resrc.driver_contact,
+                destination,
                 distanceKm: Number(resrc.dist_km),
+                version: Number(resrc.version),
                 traceId: req.traceId,
                 dryRun: true
             });
@@ -244,8 +287,8 @@ async function allocateResource(req, res) {
         `;
         const updateRes = await client.query(updateQuery, [
             incident_id,
-            latitude,
-            longitude,
+            destinationLatitude,
+            destinationLongitude,
             resrc.resource_id,
             resrc.version
         ]);
@@ -274,7 +317,9 @@ async function allocateResource(req, res) {
             requiredResourceType: required_resource_type,
             resourceId: resrc.resource_id,
             driverContact: resrc.driver_contact,
+            destination,
             distanceKm: Number(resrc.dist_km),
+            version: Number(updateRes.rows[0].version),
             traceId: req.traceId
         });
 
@@ -287,6 +332,26 @@ async function allocateResource(req, res) {
             responsePayload
         });
         idempotencyCompleted = true;
+
+        if (destination.destination_type === 'POWER_NODE') {
+            try {
+                await publishPowerGridEtaUpdatedEvent(
+                    {
+                        incidentId: incident_id,
+                        allocationId,
+                        resourceId: resrc.resource_id,
+                        resourceType: required_resource_type,
+                        destination,
+                        status: responsePayload.status,
+                        etaMinutes: responsePayload.estimated_arrival_time_mins
+                    },
+                    { traceId: req.traceId }
+                );
+            } catch (publishError) {
+                console.error('[allocate] Failed to publish powergrid ETA event:', publishError.message);
+            }
+        }
+
         res.status(201).json(responsePayload);
 
     } catch (err) {

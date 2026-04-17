@@ -8,6 +8,7 @@ const startTransport     = require('./controllers/transportStartController');
 const updateTelemetry    = require('./controllers/telemetryController');
 const requestContext = require('./middleware/requestContext');
 const {
+    requireAllocationAuth,
     requireDispatcherAuth,
     requireTelemetryAuth
 } = require('./middleware/auth');
@@ -23,7 +24,7 @@ app.get('/health', (req, res) => {
 
 // Routes
 app.get('/v1/resources/nearby', requireDispatcherAuth, getNearbyResources);
-app.post('/v1/incidents/:incident_id/allocations', requireDispatcherAuth, allocateResource);
+app.post('/v1/incidents/:incident_id/allocations', requireAllocationAuth, allocateResource);
 app.post('/v1/resources/:resource_id/transport-start', requireDispatcherAuth, startTransport);
 app.patch('/v1/resources/:resource_id/telemetry', requireTelemetryAuth, updateTelemetry);
 
