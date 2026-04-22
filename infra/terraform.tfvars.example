@@ -26,3 +26,16 @@ powergrid_eta_queue_name      = "resource-events-powergrid-eta-updated"
 powergrid_eta_dlq_name        = "resource-events-powergrid-eta-updated-dlq"
 shelter_transporting_queue_name = "resource-events-shelter-transporting"
 shelter_transporting_dlq_name = "resource-events-shelter-transporting-dlq"
+
+lambda_role_name              = "LabRole"
+nearby_lambda_package_path    = "../dist/nearby-lambda.zip"
+nearby_lambda_timeout_seconds = 10
+nearby_lambda_memory_mb       = 512
+lambda_log_retention_days     = 7
+lambda_db_connect_timeout_ms  = 5000
+lambda_db_query_timeout_ms    = 3000
+lambda_db_pool_max            = 2
+lambda_db_ssl_enabled         = false
+dispatcher_bearer_token       = "dispatcher-dev-token"
+nearby_api_throttling_burst_limit = 20
+nearby_api_throttling_rate_limit  = 10

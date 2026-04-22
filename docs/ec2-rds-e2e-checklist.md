@@ -29,7 +29,7 @@ DISPATCHER_BEARER_TOKEN=... TELEMETRY_BEARER_TOKEN=... BASE_URL=http://<ec2-publ
 ## Basic health
 
 ```bash
-curl http://44.201.248.113:3000/health
+curl http://52.91.255.203:3000/health
 ```
 
 Expected:
@@ -41,7 +41,7 @@ Expected:
 ## 1. Search nearby resources
 
 ```bash
-curl "http://44.201.248.113:3000/v1/resources/nearby?lat=13.7563&long=100.5018&radius_km=5"
+curl "http://52.91.255.203:3000/v1/resources/nearby?lat=13.7563&long=100.5018&radius_km=5"
   -H "Authorization: Bearer ${DISPATCHER_BEARER_TOKEN}"
 ```
 
@@ -60,7 +60,7 @@ Checks:
 ## 2. Allocate resource with DynamoDB idempotency
 
 ```bash
-curl -X POST "http://44.201.248.113:3000/v1/incidents/INC-2026-0001/allocations" \
+curl -X POST "http://52.91.255.203:3000/v1/incidents/INC-2026-0001/allocations" \
   -H "Authorization: Bearer ${DISPATCHER_BEARER_TOKEN}" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: 11111111-1111-1111-1111-111111111111" \
@@ -103,7 +103,7 @@ Checks:
 Use the actual UUID `resource_id` returned from DB or from the allocation response context.
 
 ```bash
-curl -X PATCH "http://44.201.248.113:3000/v1/resources/<RESOURCE_UUID>/telemetry" \
+curl -X PATCH "http://52.91.255.203:3000/v1/resources/<RESOURCE_UUID>/telemetry" \
   -H "Authorization: Bearer ${TELEMETRY_BEARER_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -131,7 +131,7 @@ Checks:
 After `transport-start`, close evacuation by returning resource to `AVAILABLE`:
 
 ```bash
-curl -X PATCH "http://44.201.248.113:3000/v1/resources/<RESOURCE_UUID>/telemetry" \
+curl -X PATCH "http://52.91.255.203:3000/v1/resources/<RESOURCE_UUID>/telemetry" \
   -H "Authorization: Bearer ${TELEMETRY_BEARER_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -145,7 +145,7 @@ curl -X PATCH "http://44.201.248.113:3000/v1/resources/<RESOURCE_UUID>/telemetry
 For general missions (for example generator delivery), close directly after `ON_SITE`:
 
 ```bash
-curl -X PATCH "http://44.201.248.113:3000/v1/resources/<RESOURCE_UUID>/telemetry" \
+curl -X PATCH "http://52.91.255.203:3000/v1/resources/<RESOURCE_UUID>/telemetry" \
   -H "Authorization: Bearer ${TELEMETRY_BEARER_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{

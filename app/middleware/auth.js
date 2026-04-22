@@ -22,31 +22,46 @@ function matchesApiKey(headerValue, expectedToken) {
   return normalized === expectedToken || normalized === `ApiKey ${expectedToken}`;
 }
 
-function requireDispatcherAuth(req, res, next) {
-  const authorization = req.get('Authorization');
+function validateDispatcherAuthorizationHeader(authorization) {
   const expectedToken = getExpectedToken('DISPATCHER_BEARER_TOKEN', 'dispatcher-dev-token');
 
   if (!authorization) {
-    return sendError(
-      res,
-      401,
-      req.traceId,
-      'AUTHORIZATION_REQUIRED',
-      'Authorization header is required.'
-    );
+    return {
+      ok: false,
+      errorCode: 'AUTHORIZATION_REQUIRED',
+      message: 'Authorization header is required.'
+    };
   }
 
   if (!matchesBearerToken(authorization, expectedToken)) {
+    return {
+      ok: false,
+      errorCode: 'INVALID_AUTHORIZATION',
+      message: 'Authorization token is invalid for dispatcher access.'
+    };
+  }
+
+  return {
+    ok: true,
+    auth: { actor: 'dispatcher', scheme: 'Bearer' }
+  };
+}
+
+function requireDispatcherAuth(req, res, next) {
+  const authorization = req.get('Authorization');
+  const validation = validateDispatcherAuthorizationHeader(authorization);
+
+  if (!validation.ok) {
     return sendError(
       res,
       401,
       req.traceId,
-      'INVALID_AUTHORIZATION',
-      'Authorization token is invalid for dispatcher access.'
+      validation.errorCode,
+      validation.message
     );
   }
 
-  req.auth = { actor: 'dispatcher', scheme: 'Bearer' };
+  req.auth = validation.auth;
   return next();
 }
 
@@ -121,5 +136,6 @@ function requireTelemetryAuth(req, res, next) {
 module.exports = {
   requireAllocationAuth,
   requireDispatcherAuth,
-  requireTelemetryAuth
+  requireTelemetryAuth,
+  validateDispatcherAuthorizationHeader
 };

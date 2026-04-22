@@ -136,3 +136,75 @@ variable "shelter_transporting_dlq_name" {
   type        = string
   default     = "resource-events-shelter-transporting-dlq"
 }
+
+variable "lambda_role_name" {
+  description = "Existing IAM role name for the nearby Lambda function in AWS Learner Lab."
+  type        = string
+  default     = "LabRole"
+}
+
+variable "nearby_lambda_package_path" {
+  description = "Path to the packaged nearby Lambda zip file."
+  type        = string
+  default     = "../dist/nearby-lambda.zip"
+}
+
+variable "nearby_lambda_timeout_seconds" {
+  description = "Timeout for the nearby Lambda function."
+  type        = number
+  default     = 10
+}
+
+variable "nearby_lambda_memory_mb" {
+  description = "Memory size for the nearby Lambda function."
+  type        = number
+  default     = 512
+}
+
+variable "lambda_log_retention_days" {
+  description = "Retention period for Lambda and API Gateway CloudWatch logs."
+  type        = number
+  default     = 7
+}
+
+variable "lambda_db_connect_timeout_ms" {
+  description = "Database connection timeout for the nearby Lambda function."
+  type        = number
+  default     = 5000
+}
+
+variable "lambda_db_query_timeout_ms" {
+  description = "Database statement timeout for the nearby Lambda function."
+  type        = number
+  default     = 3000
+}
+
+variable "lambda_db_pool_max" {
+  description = "Maximum pg pool size inside the nearby Lambda execution environment."
+  type        = number
+  default     = 2
+}
+
+variable "lambda_db_ssl_enabled" {
+  description = "Whether the nearby Lambda should connect to PostgreSQL using SSL."
+  type        = bool
+  default     = false
+}
+
+variable "dispatcher_bearer_token" {
+  description = "Dispatcher bearer token accepted by nearby Lambda."
+  type        = string
+  sensitive   = true
+}
+
+variable "nearby_api_throttling_burst_limit" {
+  description = "Burst limit for the nearby HTTP API stage."
+  type        = number
+  default     = 20
+}
+
+variable "nearby_api_throttling_rate_limit" {
+  description = "Steady-state request rate limit for the nearby HTTP API stage."
+  type        = number
+  default     = 10
+}

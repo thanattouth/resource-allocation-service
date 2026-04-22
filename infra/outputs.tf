@@ -47,3 +47,23 @@ output "sqs_shelter_transporting_dlq_url" {
   description = "SQS DLQ URL for resource.events.shelter_transporting."
   value       = aws_sqs_queue.shelter_transporting_dlq.url
 }
+
+output "nearby_lambda_function_name" {
+  description = "Lambda function name for the nearby endpoint."
+  value       = aws_lambda_function.nearby.function_name
+}
+
+output "nearby_lambda_security_group_id" {
+  description = "Security group attached to the nearby Lambda function."
+  value       = aws_security_group.lambda_nearby.id
+}
+
+output "nearby_api_base_url" {
+  description = "Base URL for the nearby HTTP API."
+  value       = aws_apigatewayv2_stage.nearby_default.invoke_url
+}
+
+output "nearby_api_endpoint" {
+  description = "Full nearby endpoint URL served by API Gateway."
+  value       = "${trimsuffix(aws_apigatewayv2_stage.nearby_default.invoke_url, "/")}/v1/resources/nearby"
+}
