@@ -11,21 +11,38 @@ container_image_tag           = "latest"
 ssh_ingress_cidr_blocks       = ["0.0.0.0/0"]
 app_ingress_cidr_blocks       = ["0.0.0.0/0"]
 
-existing_rds_host             = "your-rds-endpoint"
-existing_rds_port             = 5432
-existing_rds_name             = "disaster_db"
-existing_rds_username         = "postgres"
-existing_rds_password         = "change-me"
-existing_rds_security_group_id = "sg-xxxxxxxx"
+# Create a low-cost PostgreSQL RDS instance by default.
+create_rds                   = true
+rds_instance_class           = "db.t3.micro"
+rds_allocated_storage_gb     = 20
+rds_max_allocated_storage_gb = 25
+rds_storage_type             = "gp2"
+rds_db_name                  = "disaster_db"
+rds_username                 = "postgres"
+rds_password                 = "change-me-please"
+rds_backup_retention_days    = 0
+rds_deletion_protection      = false
+
+# To reuse an existing RDS instead, set create_rds = false and fill these:
+# existing_rds_host              = "your-rds-endpoint"
+# existing_rds_port              = 5432
+# existing_rds_name              = "disaster_db"
+# existing_rds_username          = "postgres"
+# existing_rds_password          = "change-me"
+# existing_rds_security_group_id = "sg-xxxxxxxx"
 
 dynamodb_table_name           = "resource-allocation-idempotency"
 idempotency_ttl_hours         = 24
 app_port                      = 3000
 
-powergrid_eta_queue_name      = "resource-events-powergrid-eta-updated"
-powergrid_eta_dlq_name        = "resource-events-powergrid-eta-updated-dlq"
+powergrid_completed_queue_name      = "resource-events-powergrid-completed"
+powergrid_completed_dlq_name        = "resource-events-powergrid-completed-dlq"
 shelter_transporting_queue_name = "resource-events-shelter-transporting"
 shelter_transporting_dlq_name = "resource-events-shelter-transporting-dlq"
+request_completed_queue_name  = "resource-events-request-completed"
+request_completed_dlq_name    = "resource-events-request-completed-dlq"
+incident_completed_queue_name = "resource-events-incident-completed"
+incident_completed_dlq_name   = "resource-events-incident-completed-dlq"
 
 lambda_role_name              = "LabRole"
 nearby_lambda_package_path    = "../dist/nearby-lambda.zip"

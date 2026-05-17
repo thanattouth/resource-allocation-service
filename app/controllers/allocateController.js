@@ -5,7 +5,12 @@ const { isDatabaseTimeoutError, setLocalStatementTimeout } = require('../utils/d
 const { parseBoolean, parseCoordinate, sendError, sendTimeoutError } = require('../utils/http');
 const { calculateEstimatedArrivalTimeMinutes } = require('../domain/allocation');
 const { buildRequestFingerprint } = require('../utils/idempotency');
-const { publishPowerGridEtaUpdatedEvent } = require('../utils/eventPublisher');
+const {
+    buildIdentifierContext,
+    hasAnyRequestIdentifier,
+    resolveRequestIdentifiers,
+    toIdentifierPayload
+} = require('../utils/requestIdentifiers');
 const {
     claimIdempotencyRecord,
     completeIdempotencyRecord,
@@ -15,6 +20,7 @@ const {
 function buildAllocationResponse({
     allocationId,
     incidentId,
+    requestId,
     requiredResourceType,
     resourceId,
     driverContact,
@@ -28,7 +34,7 @@ function buildAllocationResponse({
 
     return {
         allocation_id: dryRun ? null : allocationId,
-        incident_id: incidentId,
+        ...toIdentifierPayload({ incidentId, requestId }),
         status: dryRun ? 'SIMULATED' : 'ASSIGNED',
         dry_run: dryRun,
         resource: {
@@ -45,22 +51,34 @@ function buildAllocationResponse({
 }
 
 async function allocateResource(req, res) {
-    const { incident_id } = req.params;
     const {
+        incident_id: bodyIncidentId,
+        request_id: bodyRequestId,
         incident_location,
         destination,
         required_resource_type,
         required_capabilities = [],
         severity = 'MEDIUM'
     } = req.body;
+    const { incidentId, requestId, conflicts } = resolveRequestIdentifiers({
+        pathIncidentId: req.params.incident_id,
+        pathRequestId: req.params.request_id,
+        bodyIncidentId,
+        bodyRequestId
+    });
     const idempotencyKey = req.get('Idempotency-Key');
     const dryRun = parseBoolean(req.query.dry_run, false);
     const destinationLatitude = parseCoordinate(destination?.location?.lat);
     const destinationLongitude = parseCoordinate(destination?.location?.long);
-    const latitude = parseCoordinate(incident_location?.lat ?? destination?.location?.lat);
-    const longitude = parseCoordinate(incident_location?.long ?? destination?.location?.long);
+    // Search for nearest resource using destination.location if provided, otherwise incident_location
+    const searchLatitude = parseCoordinate(destination?.location?.lat ?? incident_location?.lat);
+    const searchLongitude = parseCoordinate(destination?.location?.long ?? incident_location?.long);
+    // incident_location is always stored in DB for multi-leg journeys
+    const incidentLatitude = parseCoordinate(incident_location?.lat);
+    const incidentLongitude = parseCoordinate(incident_location?.long);
+    const identifierContext = buildIdentifierContext({ incidentId, requestId });
     const requestFingerprint = buildRequestFingerprint({
-        incident_id,
+        ...identifierContext,
         dry_run: dryRun,
         incident_location,
         destination,
@@ -79,17 +97,27 @@ async function allocateResource(req, res) {
         );
     }
 
-    if (!incident_id) {
+    if (conflicts.length > 0) {
         return sendError(
             res,
             400,
             req.traceId,
-            'INVALID_INCIDENT_ID',
-            'incident_id path parameter is required.'
+            'IDENTIFIER_CONFLICT',
+            `Conflicting identifier values were provided for: ${conflicts.join(', ')}.`
         );
     }
 
-    if (latitude === null || longitude === null || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+    if (!hasAnyRequestIdentifier({ incidentId, requestId })) {
+        return sendError(
+            res,
+            400,
+            req.traceId,
+            'MISSING_REQUEST_IDENTIFIER',
+            'At least one of incident_id or request_id is required.'
+        );
+    }
+
+    if (searchLatitude === null || searchLongitude === null || searchLatitude < -90 || searchLatitude > 90 || searchLongitude < -180 || searchLongitude > 180) {
         return sendError(
             res,
             400,
@@ -99,13 +127,13 @@ async function allocateResource(req, res) {
         );
     }
 
-    if (!destination || !destination.destination_type || !destination.destination_id) {
+    if (!destination || !destination.destination_type) {
         return sendError(
             res,
             400,
             req.traceId,
             'INVALID_DESTINATION',
-            'destination.destination_type and destination.destination_id are required.'
+            'destination.destination_type is required.'
         );
     }
 
@@ -153,7 +181,7 @@ async function allocateResource(req, res) {
     try {
         claimResult = await claimIdempotencyRecord({
             idempotencyKey,
-            incidentId: incident_id,
+            identifierContext,
             requestFingerprint
         });
     } catch (error) {
@@ -226,8 +254,8 @@ async function allocateResource(req, res) {
             LIMIT 1 FOR UPDATE SKIP LOCKED;
         `;
         const findRes = await client.query(findQuery, [
-            latitude,
-            longitude,
+            searchLatitude,
+            searchLongitude,
             required_resource_type,
             JSON.stringify(required_capabilities)
         ]);
@@ -253,7 +281,8 @@ async function allocateResource(req, res) {
         if (dryRun) {
             const responsePayload = buildAllocationResponse({
                 allocationId: null,
-                incidentId: incident_id,
+                incidentId,
+                requestId,
                 requiredResourceType: required_resource_type,
                 resourceId: resrc.resource_id,
                 driverContact: resrc.driver_contact,
@@ -280,23 +309,31 @@ async function allocateResource(req, res) {
             UPDATE resources
             SET status = 'EN_ROUTE',
                 assigned_incident_id = $1,
+                assigned_request_id = $2,
                 version = version + 1,
-                destination_location = ST_SetSRID(ST_MakePoint($3, $2), 4326)::geography,
-                destination_type = $4,
-                destination_id = $5,
-                destination_name = $6
-            WHERE resource_id = $7 AND version = $8
+                destination_location = ST_SetSRID(ST_MakePoint($4, $3), 4326)::geography,
+                incident_location = CASE WHEN $10::float8 IS NOT NULL AND $11::float8 IS NOT NULL
+                    THEN ST_SetSRID(ST_MakePoint($11::float8, $10::float8), 4326)::geography
+                    ELSE NULL
+                END,
+                destination_type = $5,
+                destination_id = COALESCE($6, destination_id),
+                destination_name = $7
+            WHERE resource_id = $8 AND version = $9
             RETURNING *;
         `;
         const updateRes = await client.query(updateQuery, [
-            incident_id,
+            incidentId,
+            requestId,
             destinationLatitude,
             destinationLongitude,
             destination.destination_type,
-            destination.destination_id,
+            destination.destination_id || null,
             destination.destination_name || null,
             resrc.resource_id,
-            resrc.version
+            resrc.version,
+            incidentLatitude,
+            incidentLongitude
         ]);
 
         if (updateRes.rowCount === 0) {
@@ -319,7 +356,8 @@ async function allocateResource(req, res) {
         const allocationId = `ALLOC-${Date.now()}`;
         const responsePayload = buildAllocationResponse({
             allocationId,
-            incidentId: incident_id,
+            incidentId,
+            requestId,
             requiredResourceType: required_resource_type,
             resourceId: resrc.resource_id,
             driverContact: resrc.driver_contact,
@@ -338,25 +376,6 @@ async function allocateResource(req, res) {
             responsePayload
         });
         idempotencyCompleted = true;
-
-        if (destination.destination_type === 'POWER_NODE') {
-            try {
-                await publishPowerGridEtaUpdatedEvent(
-                    {
-                        incidentId: incident_id,
-                        allocationId,
-                        resourceId: resrc.resource_id,
-                        resourceType: required_resource_type,
-                        destination,
-                        status: responsePayload.status,
-                        etaMinutes: responsePayload.estimated_arrival_time_mins
-                    },
-                    { traceId: req.traceId }
-                );
-            } catch (publishError) {
-                console.error('[allocate] Failed to publish powergrid ETA event:', publishError.message);
-            }
-        }
 
         res.status(201).json(responsePayload);
 

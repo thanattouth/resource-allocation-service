@@ -1,0 +1,87 @@
+# Cost-Optimized Infrastructure (No RDS)
+# This replaces RDS with local PostgreSQL on EC2
+
+# Remove RDS-related resources - using local PostgreSQL in Docker instead
+# No aws_db_instance or aws_rds_cluster resources
+
+# EC2 Instance (t3.micro or t3.small for cost savings)
+resource "aws_instance" "app" {
+  ami                         = data.aws_ami.amazon_linux_2023.id
+  instance_type               = "t3.micro"  # Cheapest option with burst capability
+  subnet_id                   = data.aws_subnets.default.ids[0]
+  availability_zone           = var.preferred_availability_zone
+  associate_public_ip_address = true
+  vpc_security_group_ids      = [aws_security_group.ec2_app.id]
+  iam_instance_profile        = var.existing_instance_profile_name
+  key_name                    = aws_key_pair.ec2_app.key_name
+
+  root_block_device {
+    volume_size = 20  # GB - enough for OS + PostgreSQL data
+    volume_type = "gp3"  # Cheaper than gp2, better performance
+    encrypted   = true
+  }
+
+  # Additional volume for PostgreSQL data persistence
+  ebs_block_device {
+    device_name = "/dev/sdf"
+    volume_size = 10  # GB for PostgreSQL data
+    volume_type = "gp3"
+    encrypted   = true
+  }
+
+  user_data = templatefile("${path.module}/templates/ec2-user-data-cost-optimized.sh.tftpl", {
+    aws_region                              = var.aws_region
+    app_port                                = var.app_port
+    # No RDS - using local PostgreSQL
+    dynamodb_table_name                     = aws_dynamodb_table.idempotency.name
+    sqs_powergrid_completed_url               = aws_sqs_queue.powergrid_completed.url
+    sqs_shelter_transporting_url            = aws_sqs_queue.shelter_transporting.url
+    sqs_user_location_request_completed_url = aws_sqs_queue.request_completed.url
+    sqs_incident_reporter_completed_url     = aws_sqs_queue.incident_completed.url
+    image_uri                               = local.container_image_uri
+    db_password                             = "postgres123"  # Change in production
+  })
+
+  tags = {
+    Name        = "${local.name_prefix}-ec2"
+    Project     = var.project_name
+    Environment = var.environment
+  }
+}
+
+# Elastic IP (to keep same IP after restart)
+resource "aws_eip" "app" {
+  domain = "vpc"
+  tags = {
+    Name = "${local.name_prefix}-eip"
+  }
+}
+
+resource "aws_eip_association" "app" {
+  instance_id   = aws_instance.app.id
+  allocation_id = aws_eip.app.id
+}
+
+# Cost estimate output
+output "monthly_cost_estimate" {
+  description = "Estimated monthly cost (USD)"
+  value       = <<EOF
+
+Cost Estimate (US-East-1):
+==========================
+EC2 t3.micro (on-demand):     ~$8.50/month
+EBS gp3 30GB:                 ~$2.40/month
+DynamoDB on-demand:           ~$0-1/month (depends on usage)
+SQS (4 queues):               ~$0/month (free tier)
+Lambda (nearby):              ~$0/month (minimal invocations)
+Data Transfer:                ~$0-5/month (depends on usage)
+--------------------------
+Total Estimated:            ~$11-17/month
+
+Savings vs RDS:
+- RDS db.t3.micro:          ~$13/month (minimum)
+- RDS storage 20GB:         ~$2.30/month
+- Your current savings:     ~$15/month
+
+EOF
+}

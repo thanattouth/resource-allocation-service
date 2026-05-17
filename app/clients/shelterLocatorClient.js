@@ -3,10 +3,10 @@ function getShelterLocatorBaseUrl() {
 }
 
 function getShelterLocatorTimeoutMs() {
-  return Number.parseInt(process.env.SHELTER_LOCATOR_TIMEOUT_MS || '1000', 10);
+  return Number.parseInt(process.env.SHELTER_LOCATOR_TIMEOUT_MS || '5000', 10);
 }
 
-function buildNearbyShelterUrl({ latitude, longitude, incidentId }) {
+function buildNearbyShelterUrl({ latitude, longitude }) {
   const baseUrl = getShelterLocatorBaseUrl();
   if (!baseUrl) {
     return null;
@@ -16,16 +16,13 @@ function buildNearbyShelterUrl({ latitude, longitude, incidentId }) {
   url.searchParams.set('latitude', String(latitude));
   url.searchParams.set('longitude', String(longitude));
   url.searchParams.set('limit', '1');
-
-  if (incidentId) {
-    url.searchParams.set('incident_id', incidentId);
-  }
+  url.searchParams.set('radiusKm', '50');
 
   return url;
 }
 
-async function suggestNearbyShelter({ latitude, longitude, incidentId, traceId, fetchImpl = fetch }) {
-  const url = buildNearbyShelterUrl({ latitude, longitude, incidentId });
+async function suggestNearbyShelter({ latitude, longitude, traceId, fetchImpl = fetch }) {
+  const url = buildNearbyShelterUrl({ latitude, longitude });
   if (!url) {
     return {
       status: 'UNAVAILABLE',
@@ -67,13 +64,13 @@ async function suggestNearbyShelter({ latitude, longitude, incidentId, traceId, 
       status: 'FOUND',
       shelter: {
         shelter_id: shelter.shelterId,
-        name: shelter.name,
+        name: shelter.placeName || 'Unknown Shelter',
         location: {
-          lat: shelter.latitude ?? shelter.location?.lat ?? null,
-          long: shelter.longitude ?? shelter.location?.long ?? null
+          lat: shelter.lat ?? null,
+          long: shelter.lng ?? null
         },
-        shelter_status: shelter.status ?? 'UNKNOWN',
-        power_status: shelter.powerStatus ?? 'UNKNOWN'
+        shelter_status: shelter.occupancy || 'UNKNOWN',
+        power_status: 'UNKNOWN'
       }
     };
   } catch (error) {

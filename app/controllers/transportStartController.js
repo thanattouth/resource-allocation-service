@@ -8,6 +8,7 @@ const {
 } = require('../domain/allocation');
 const { validateStatusTransition } = require('../domain/resourceState');
 const { suggestNearbyShelter } = require('../clients/shelterLocatorClient');
+const { findBestHospital, createTransferRequest } = require('../clients/hospitalClient');
 const { isUuidResourceId } = require('../utils/resourceId');
 const {
   publishShelterTransportingEvent
@@ -21,6 +22,13 @@ const {
   completeIdempotencyRecord,
   releaseIdempotencyRecord
 } = require('../utils/dynamoIdempotency');
+const {
+  buildIdentifierContext,
+  hasAnyRequestIdentifier,
+  matchesAssignedIdentifiers,
+  resolveRequestIdentifiers,
+  toIdentifierPayload
+} = require('../utils/requestIdentifiers');
 
 function buildDestinationResponse(shelter) {
   if (!shelter) {
@@ -37,21 +45,48 @@ function buildDestinationResponse(shelter) {
   };
 }
 
+function buildHospitalDestinationResponse(hospital) {
+  if (!hospital) {
+    return null;
+  }
+
+  return {
+    destination_type: 'HOSPITAL',
+    destination_id: hospital.hospitalId,
+    destination_name: hospital.name,
+    location: {
+      lat: hospital.lat,
+      long: hospital.lon
+    },
+    status: hospital.status,
+    address: hospital.address,
+    available_beds: hospital.availableBeds,
+    available_icu: hospital.availableICU,
+    available_emergency_bed: hospital.availableEmergencyBed
+  };
+}
+
 async function startTransport(req, res) {
   const { resource_id } = req.params;
   const idempotencyKey = req.get('Idempotency-Key');
   const {
-    incident_id,
+    incident_id: bodyIncidentId,
+    request_id: bodyRequestId,
     transport_type,
     current_location,
     passenger_count,
     version
   } = req.body;
+  const { incidentId, requestId, conflicts } = resolveRequestIdentifiers({
+    bodyIncidentId,
+    bodyRequestId
+  });
 
   const latitude = parseCoordinate(current_location?.lat);
   const longitude = parseCoordinate(current_location?.long);
+  const identifierContext = buildIdentifierContext({ incidentId, requestId });
   const requestFingerprint = buildRequestFingerprint({
-    incident_id,
+    ...identifierContext,
     transport_type,
     current_location,
     passenger_count,
@@ -88,13 +123,23 @@ async function startTransport(req, res) {
     );
   }
 
-  if (!incident_id) {
+  if (conflicts.length > 0) {
     return sendError(
       res,
       400,
       req.traceId,
-      'INVALID_INCIDENT_ID',
-      'incident_id is required.'
+      'IDENTIFIER_CONFLICT',
+      `Conflicting identifier values were provided for: ${conflicts.join(', ')}.`
+    );
+  }
+
+  if (!hasAnyRequestIdentifier({ incidentId, requestId })) {
+    return sendError(
+      res,
+      400,
+      req.traceId,
+      'MISSING_REQUEST_IDENTIFIER',
+      'At least one of incident_id or request_id is required.'
     );
   }
 
@@ -144,7 +189,7 @@ async function startTransport(req, res) {
   try {
     const claimResult = await claimIdempotencyRecord({
       idempotencyKey,
-      incidentId: incident_id,
+      identifierContext,
       requestFingerprint
     });
 
@@ -192,7 +237,7 @@ async function startTransport(req, res) {
     const existingResourceResult = await runInStatementTimeoutSession(pool, (client) =>
       client.query(
         `
-          SELECT resource_id, status, assigned_incident_id, version, resource_type
+          SELECT resource_id, status, assigned_incident_id, assigned_request_id, version, resource_type
           FROM resources
           WHERE resource_id = $1::uuid
         `,
@@ -223,13 +268,13 @@ async function startTransport(req, res) {
       );
     }
 
-    if (currentResource.assigned_incident_id && currentResource.assigned_incident_id !== incident_id) {
+    if (!matchesAssignedIdentifiers(currentResource, { incidentId, requestId })) {
       return sendError(
         res,
         409,
         req.traceId,
-        'INCIDENT_MISMATCH',
-        'incident_id does not match the resource assignment currently in progress.'
+        'IDENTIFIER_MISMATCH',
+        'Provided incident_id/request_id does not match the resource assignment currently in progress.'
       );
     }
 
@@ -238,17 +283,73 @@ async function startTransport(req, res) {
       reason: 'Shelter lookup was not attempted.'
     };
 
+    let hospitalLookup = {
+      status: 'UNAVAILABLE',
+      reason: 'Hospital lookup was not attempted.',
+      hospital: null,
+      transferRequest: null
+    };
+
     if (transport_type === 'SHELTER_EVACUATION') {
       shelterLookup = await suggestNearbyShelter({
         latitude,
         longitude,
-        incidentId: incident_id,
         traceId: req.traceId
       });
     }
 
-    const destinationLat = shelterLookup.status === 'FOUND' ? shelterLookup.shelter.location.lat : null;
-    const destinationLong = shelterLookup.status === 'FOUND' ? shelterLookup.shelter.location.long : null;
+    if (transport_type === 'HOSPITAL_TRANSFER') {
+      hospitalLookup.status = 'SEARCHING';
+      try {
+        const hospital = await findBestHospital({
+          lat: latitude,
+          lon: longitude,
+          severityLevel: 'low'
+        });
+
+        if (hospital) {
+          // Create transfer request
+          const transferRequest = await createTransferRequest({
+            incidentId: incidentId || currentResource.assigned_incident_id || 'UNKNOWN',
+            hospitalId: hospital.hospitalId,
+            severityLevel: 'LOW',
+            injuryDescription: 'Emergency transport from disaster scene',
+            lat: latitude,
+            lon: longitude,
+            requestedBy: 'ResourceAllocationService'
+          });
+
+          hospitalLookup = {
+            status: 'FOUND',
+            reason: 'Hospital found and transfer request created',
+            hospital: hospital,
+            transferRequest: transferRequest
+          };
+        } else {
+          hospitalLookup = {
+            status: 'UNAVAILABLE',
+            reason: 'No available hospitals with open beds found nearby.',
+            hospital: null,
+            transferRequest: null
+          };
+        }
+      } catch (error) {
+        console.error('[transport-start] Hospital lookup failed:', error.message);
+        hospitalLookup = {
+          status: 'ERROR',
+          reason: `Hospital API error: ${error.message}`,
+          hospital: null,
+          transferRequest: null
+        };
+      }
+    }
+
+    const destinationLat = shelterLookup.status === 'FOUND'
+      ? shelterLookup.shelter.location.lat
+      : (hospitalLookup.status === 'FOUND' ? hospitalLookup.hospital.lat : null);
+    const destinationLong = shelterLookup.status === 'FOUND'
+      ? shelterLookup.shelter.location.long
+      : (hospitalLookup.status === 'FOUND' ? hospitalLookup.hospital.lon : null);
     const updateResult = await runInStatementTimeoutSession(pool, (client) =>
       client.query(
         `
@@ -285,9 +386,9 @@ async function startTransport(req, res) {
           destinationLong,
           resource_id,
           Number(version),
-          shelterLookup.status === 'FOUND' ? 'SHELTER' : null,
-          shelterLookup.status === 'FOUND' ? shelterLookup.shelter.shelter_id : null,
-          shelterLookup.status === 'FOUND' ? shelterLookup.shelter.name : null
+          shelterLookup.status === 'FOUND' ? 'SHELTER' : (hospitalLookup.status === 'FOUND' ? 'HOSPITAL' : null),
+          shelterLookup.status === 'FOUND' ? shelterLookup.shelter.shelter_id : (hospitalLookup.status === 'FOUND' ? hospitalLookup.hospital.hospitalId : null),
+          shelterLookup.status === 'FOUND' ? shelterLookup.shelter.name : (hospitalLookup.status === 'FOUND' ? hospitalLookup.hospital.name : null)
         ]
       )
     );
@@ -303,26 +404,39 @@ async function startTransport(req, res) {
     }
 
     const updated = updateResult.rows[0];
+    
+    // Determine destination based on transport type
+    const destination = shelterLookup.status === 'FOUND'
+      ? buildDestinationResponse(shelterLookup.shelter)
+      : (hospitalLookup.status === 'FOUND' ? buildHospitalDestinationResponse(hospitalLookup.hospital) : null);
+    
+    const isDestinationFound = shelterLookup.status === 'FOUND' || hospitalLookup.status === 'FOUND';
+    const destinationReason = shelterLookup.status === 'FOUND'
+      ? null
+      : (hospitalLookup.status === 'FOUND' ? null : (hospitalLookup.reason || shelterLookup.reason));
+    
     const responsePayload = {
       resource_id: updated.resource_id,
-      incident_id,
+      ...toIdentifierPayload({ incidentId, requestId }),
       status: updated.status,
       transport_type,
-      destination: buildDestinationResponse(
-        shelterLookup.status === 'FOUND' ? shelterLookup.shelter : null
-      ),
-      server_instruction: shelterLookup.status === 'FOUND'
+      destination,
+      server_instruction: isDestinationFound
         ? 'PROCEED_TO_DESTINATION'
         : 'DESTINATION_PENDING',
-      destination_pending: shelterLookup.status !== 'FOUND',
-      degraded: shelterLookup.status !== 'FOUND',
-      degraded_reason: shelterLookup.status !== 'FOUND' ? shelterLookup.reason : null,
+      destination_pending: !isDestinationFound,
+      degraded: !isDestinationFound,
+      degraded_reason: destinationReason,
       version: updated.version,
       last_updated_at: updated.last_updated_at,
       trace_id: req.traceId
     };
 
-    const httpStatus = shelterLookup.status === 'FOUND' ? 200 : 202;
+    const httpStatus = (shelterLookup.status === 'FOUND' || hospitalLookup.status === 'FOUND') ? 200 : 202;
+    
+    // Track published events
+    const publishedEvents = [];
+    
     await completeIdempotencyRecord({
       idempotencyKey,
       allocationId: null,
@@ -339,7 +453,8 @@ async function startTransport(req, res) {
       try {
         await publishShelterTransportingEvent(
           {
-            incidentId: responsePayload.incident_id,
+            incidentId,
+            requestId,
             allocationId: null,
             resourceId: responsePayload.resource_id,
             resourceType: currentResource.resource_type,
@@ -350,9 +465,16 @@ async function startTransport(req, res) {
           },
           { traceId: req.traceId }
         );
+        publishedEvents.push({ event_type: 'SHELTER_TRANSPORTING', status: 'PUBLISHED' });
       } catch (publishError) {
         console.error('[transport-start] Failed to publish shelter transporting event:', publishError.message);
+        publishedEvents.push({ event_type: 'SHELTER_TRANSPORTING', status: 'FAILED', error: publishError.message });
       }
+    }
+    
+    // Add published events to response
+    if (publishedEvents.length > 0) {
+      responsePayload.published_events = publishedEvents;
     }
 
     return res.status(httpStatus).json(responsePayload);

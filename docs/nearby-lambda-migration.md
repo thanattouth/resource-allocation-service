@@ -1,89 +1,64 @@
-# Nearby Lambda Migration
+# Nearby Lambda Deployment Notes
 
-This document describes the recommended first-step migration for moving `GET /v1/resources/nearby` from the EC2-hosted Express app to AWS Lambda while leaving the rest of the service on EC2.
+The current architecture already supports a split path:
 
-## Why `nearby` is a good Lambda candidate
+- EC2 Express app still serves the full service
+- Lambda + API Gateway serves `GET /v1/resources/nearby`
 
-- It is read-heavy and stateless at the HTTP layer.
-- Its business logic is already separated into [nearbyService.js](/Users/hamin/Documents/CS366/ResourceAllocationService/app/services/nearbyService.js), so the Lambda handler can reuse the same code path as Express.
-- It can scale independently from write-heavy endpoints such as allocation and telemetry.
-- Failures and traffic spikes on nearby searches no longer compete as directly with the EC2 app process.
+## What Runs In Lambda
 
-## Why not move everything at once
+- handler: [app/lambda/nearbyHandler.js](/Users/hamin/Documents/CS366/ResourceAllocationService/app/lambda/nearbyHandler.js)
+- shared search logic: [app/services/nearbyService.js](/Users/hamin/Documents/CS366/ResourceAllocationService/app/services/nearbyService.js)
 
-- Lambda introduces packaging, VPC networking, and API Gateway wiring.
-- PostgreSQL access from Lambda needs additional security-group rules and can be harder to troubleshoot than the single-host EC2 path.
-- Keeping the EC2 route in place during rollout gives you a safety net.
+## Why This Split Exists
 
-## Recommended rollout
+- nearby search is stateless at the HTTP layer
+- it benefits from independent scaling
+- write-heavy flows still stay on the EC2 app
 
-1. Keep the existing EC2 route as-is.
-2. Deploy the new nearby Lambda and API Gateway path in parallel.
-3. Validate the API response contract and database behavior.
-4. Switch clients to the API Gateway URL.
-5. Remove the EC2 nearby route only after the Lambda path is stable.
-
-## New infrastructure added
-
-- Reuse IAM role `LabRole` for Lambda execution.
-- Add a dedicated Lambda security group and allow it to reach the existing RDS security group.
-- Create the nearby Lambda function from a zip artifact.
-- Create an HTTP API Gateway route for `GET /v1/resources/nearby`.
-- Add CloudWatch log groups for Lambda and API Gateway.
-
-## Package the Lambda
-
-Run this from the repository root:
+## Build Package
 
 ```bash
-bash scripts/build-nearby-lambda.sh
+npm run build:lambda:nearby
 ```
 
-This creates:
+This packages:
 
-- `dist/nearby-lambda.zip`
+- `app/`
+- `package.json`
+- `package-lock.json`
+- `node_modules/`
 
-The current packaging approach copies the existing `app/` tree and `node_modules/` into the deployment zip. It is intentionally simple for Learner Lab and good for a first migration.
+into `dist/nearby-lambda.zip`
 
-## Deploy with OpenTofu
+## Infra Expectations
 
-From [infra](/Users/hamin/Documents/CS366/ResourceAllocationService/infra):
+The Terraform side provisions:
 
-```bash
-cp terraform.tfvars.example terraform.tfvars
-tofu init
-tofu plan
-tofu apply
-```
+- Lambda function
+- dedicated Lambda security group
+- RDS access rule for the Lambda security group
+- HTTP API Gateway route `GET /v1/resources/nearby`
+- CloudWatch log groups for Lambda and API Gateway
 
-Make sure these values are correct in `terraform.tfvars`:
+Relevant outputs:
 
-- `existing_rds_host`
-- `existing_rds_port`
-- `existing_rds_name`
-- `existing_rds_username`
-- `existing_rds_password`
-- `existing_rds_security_group_id`
-- `dispatcher_bearer_token`
-- `lambda_role_name = "LabRole"`
+- `nearby_lambda_function_name`
+- `nearby_lambda_security_group_id`
+- `nearby_api_base_url`
+- `nearby_api_endpoint`
 
-## Test the new endpoint
+## Runtime Contract
 
-After apply:
+The Lambda route keeps the same dispatcher-bearer-token requirement and the same query contract as the EC2 route.
 
-```bash
-tofu output nearby_api_endpoint
-```
-
-Example request:
+Example:
 
 ```bash
-curl "$(tofu output -raw nearby_api_endpoint)?lat=13.7563&long=100.5018&radius_km=5" \
+curl "$(tofu output -raw nearby_api_endpoint)?lat=13.7563&long=100.5018&radius_km=20" \
   -H "Authorization: Bearer ${DISPATCHER_BEARER_TOKEN}"
 ```
 
-## Important limitations
+## Operational Note
 
-- This Terraform assumes the reused RDS instance is reachable from the default VPC subnets selected in the existing infra.
-- If your RDS instance is in a different VPC, you must change the subnet and security-group strategy.
-- `LabRole` must already have enough permissions for Lambda execution, VPC attachment, and CloudWatch Logs writes.
+Keep the EC2 route available as a fallback while validating the API Gateway path against real data and credentials.

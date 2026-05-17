@@ -63,36 +63,102 @@ variable "container_image_tag" {
   default     = "latest"
 }
 
-variable "existing_rds_host" {
-  description = "Existing RDS endpoint hostname to reuse."
+variable "create_rds" {
+  description = "Whether to create a low-cost PostgreSQL RDS instance. Set false to reuse an existing RDS instance."
+  type        = bool
+  default     = true
+}
+
+variable "rds_instance_class" {
+  description = "RDS instance class. db.t3.micro is the low-cost Learner Lab default."
   type        = string
+  default     = "db.t3.micro"
+}
+
+variable "rds_allocated_storage_gb" {
+  description = "Initial RDS storage in GB. 20GB is the PostgreSQL minimum."
+  type        = number
+  default     = 20
+}
+
+variable "rds_max_allocated_storage_gb" {
+  description = "RDS autoscaling storage cap in GB."
+  type        = number
+  default     = 25
+}
+
+variable "rds_storage_type" {
+  description = "RDS storage type."
+  type        = string
+  default     = "gp2"
+}
+
+variable "rds_db_name" {
+  description = "Database name to create when create_rds is true."
+  type        = string
+  default     = "disaster_db"
+}
+
+variable "rds_username" {
+  description = "Master username for the created RDS instance."
+  type        = string
+  default     = "postgres"
+}
+
+variable "rds_password" {
+  description = "Master password for the created RDS instance."
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
+variable "rds_backup_retention_days" {
+  description = "RDS backup retention period. 0 minimizes cost for Learner Lab demos."
+  type        = number
+  default     = 0
+}
+
+variable "rds_deletion_protection" {
+  description = "Whether deletion protection is enabled on the created RDS instance."
+  type        = bool
+  default     = false
+}
+
+variable "existing_rds_host" {
+  description = "Existing RDS endpoint hostname to reuse when create_rds is false."
+  type        = string
+  default     = null
 }
 
 variable "existing_rds_port" {
-  description = "Existing RDS port."
+  description = "PostgreSQL port for created or existing RDS."
   type        = number
   default     = 5432
 }
 
 variable "existing_rds_name" {
-  description = "Database name in the existing RDS instance."
+  description = "Database name in the existing RDS instance when create_rds is false."
   type        = string
+  default     = null
 }
 
 variable "existing_rds_username" {
-  description = "Database username for the existing RDS instance."
+  description = "Database username for the existing RDS instance when create_rds is false."
   type        = string
+  default     = null
 }
 
 variable "existing_rds_password" {
-  description = "Database password for the existing RDS instance."
+  description = "Database password for the existing RDS instance when create_rds is false."
   type        = string
   sensitive   = true
+  default     = null
 }
 
 variable "existing_rds_security_group_id" {
-  description = "Security group ID attached to the existing RDS instance. Used to allow access from the new EC2 host."
+  description = "Security group ID attached to the existing RDS instance when create_rds is false."
   type        = string
+  default     = null
 }
 
 variable "dynamodb_table_name" {
@@ -113,16 +179,16 @@ variable "app_port" {
   default     = 3000
 }
 
-variable "powergrid_eta_queue_name" {
-  description = "SQS queue name for resource.events.powergrid_eta_updated."
+variable "powergrid_completed_queue_name" {
+  description = "SQS queue name for resource.events.powergrid_completed."
   type        = string
-  default     = "resource-events-powergrid-eta-updated"
+  default     = "resource-events-powergrid-completed"
 }
 
-variable "powergrid_eta_dlq_name" {
-  description = "SQS dead-letter queue name for powergrid ETA events."
+variable "powergrid_completed_dlq_name" {
+  description = "SQS dead-letter queue name for powergrid completed events."
   type        = string
-  default     = "resource-events-powergrid-eta-updated-dlq"
+  default     = "resource-events-powergrid-completed-dlq"
 }
 
 variable "shelter_transporting_queue_name" {
@@ -135,6 +201,30 @@ variable "shelter_transporting_dlq_name" {
   description = "SQS dead-letter queue name for shelter transporting events."
   type        = string
   default     = "resource-events-shelter-transporting-dlq"
+}
+
+variable "request_completed_queue_name" {
+  description = "SQS queue name for resource.events.request_completed."
+  type        = string
+  default     = "resource-events-request-completed"
+}
+
+variable "request_completed_dlq_name" {
+  description = "SQS dead-letter queue name for request completion events."
+  type        = string
+  default     = "resource-events-request-completed-dlq"
+}
+
+variable "incident_completed_queue_name" {
+  description = "SQS queue name for resource.events.incident_completed."
+  type        = string
+  default     = "resource-events-incident-completed"
+}
+
+variable "incident_completed_dlq_name" {
+  description = "SQS dead-letter queue name for incident completion events."
+  type        = string
+  default     = "resource-events-incident-completed-dlq"
 }
 
 variable "lambda_role_name" {

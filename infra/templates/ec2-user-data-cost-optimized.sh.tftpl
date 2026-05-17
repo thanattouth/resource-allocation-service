@@ -1,0 +1,134 @@
+#!/bin/bash
+# Cost-optimized EC2 user-data: PostgreSQL runs locally on EC2 instead of RDS
+
+set -euo pipefail
+
+exec > >(tee /var/log/user-data.log) 2>&1
+
+echo "Starting setup at $(date)"
+
+# Update system
+yum update -y
+
+# Install Docker
+yum install -y docker
+systemctl start docker
+systemctl enable docker
+usermod -aG docker ec2-user
+
+# Install Docker Compose
+curl -L "https://github.com/docker/compose/releases/download/v2.23.0/docker-compose-linux-x86_64" -o /usr/local/bin/docker-compose
+chmod +x /usr/local/bin/docker-compose
+
+# Mount additional EBS volume for PostgreSQL data
+DATA_VOLUME=/dev/nvme1n1
+MOUNT_POINT=/var/lib/postgres-data
+
+if lsblk | grep -q nvme1n1; then
+    # Format if not already formatted
+    if ! file -s $DATA_VOLUME | grep -q ext4; then
+        mkfs.ext4 $DATA_VOLUME
+    fi
+    
+    # Mount
+    mkdir -p $MOUNT_POINT
+    mount $DATA_VOLUME $MOUNT_POINT
+    
+    # Add to fstab for persistence
+    echo "$DATA_VOLUME $MOUNT_POINT ext4 defaults,nofail 0 2" >> /etc/fstab
+    
+    echo "Data volume mounted at $MOUNT_POINT"
+fi
+
+# Create application directory
+mkdir -p /opt/resource-allocation
+cd /opt/resource-allocation
+
+# Create .env file
+cat > .env << 'ENVFILE'
+DB_HOST=postgres
+DB_PORT=5432
+DB_NAME=disaster_db
+DB_USER=postgres
+DB_PASSWORD=${db_password}
+DB_SSL=false
+AWS_REGION=${aws_region}
+DYNAMODB_IDEMPOTENCY_TABLE=${dynamodb_table_name}
+IDEMPOTENCY_TTL_HOURS=24
+DISPATCHER_BEARER_TOKEN=dispatcher-dev-token
+ALLOCATION_API_KEY=allocation-upstream-key
+TELEMETRY_BEARER_TOKEN=telemetry-device-token
+TELEMETRY_API_KEY=telemetry-device-key
+SQS_POWERGRID_COMPLETED_URL=${sqs_powergrid_completed_url}
+SQS_SHELTER_TRANSPORTING_URL=${sqs_shelter_transporting_url}
+SQS_USER_LOCATION_REQUEST_COMPLETED_URL=${sqs_user_location_request_completed_url}
+SQS_INCIDENT_REPORTER_COMPLETED_URL=${sqs_incident_reporter_completed_url}
+SHELTER_LOCATOR_BASE_URL=
+HOSPITAL_API_BASE_URL=https://3w10sext9e.execute-api.us-east-1.amazonaws.com
+ENVFILE
+
+# Create docker-compose.yml
+cat > docker-compose.yml << 'COMPOSE'
+version: '3.8'
+
+services:
+  postgres:
+    image: postgis/postgis:15-3.4-alpine
+    container_name: resource-allocation-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${db_password}
+      POSTGRES_DB: disaster_db
+    volumes:
+      - /var/lib/postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d disaster_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  app:
+    image: ${image_uri}
+    container_name: resource-allocation-app
+    env_file:
+      - .env
+    ports:
+      - "${app_port}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+COMPOSE
+
+# Start PostgreSQL first
+echo "Starting PostgreSQL..."
+docker-compose up -d postgres
+
+# Wait for PostgreSQL to be healthy
+echo "Waiting for PostgreSQL to be ready..."
+sleep 30
+
+# Initialize schema and seed data using the application bootstrap script
+echo "Initializing database with app/db/init-db.js..."
+docker run --rm \
+  --env-file .env \
+  ${image_uri} \
+  npm run init-db
+
+# Start application
+echo "Starting application..."
+docker-compose up -d app
+
+echo "Setup complete at $(date)"
+echo "Application available at: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4):${app_port}"

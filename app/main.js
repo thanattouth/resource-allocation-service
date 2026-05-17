@@ -1,8 +1,10 @@
 require('dotenv').config();
 const express = require('express');
+const path = require('path');
 const app = express();
 
 const getNearbyResources = require('./controllers/nearbyController');
+const getResource        = require('./controllers/resourceController');
 const allocateResource   = require('./controllers/allocateController');
 const startTransport     = require('./controllers/transportStartController');
 const updateTelemetry    = require('./controllers/telemetryController');
@@ -22,9 +24,17 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString(), trace_id: req.traceId });
 });
 
+// Mobile Driver Simulator — จำลองหน้าจอมือถือคนขับรถกู้ภัย
+app.get('/driver', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'mobile-driver.html'));
+});
+
 // Routes
 app.get('/v1/resources/nearby', requireDispatcherAuth, getNearbyResources);
+app.get('/v1/resources/:resource_id', requireDispatcherAuth, getResource);
+app.post('/v1/allocations', requireAllocationAuth, allocateResource);
 app.post('/v1/incidents/:incident_id/allocations', requireAllocationAuth, allocateResource);
+app.post('/v1/requests/:request_id/allocations', requireAllocationAuth, allocateResource);
 app.post('/v1/resources/:resource_id/transport-start', requireDispatcherAuth, startTransport);
 app.patch('/v1/resources/:resource_id/telemetry', requireTelemetryAuth, updateTelemetry);
 

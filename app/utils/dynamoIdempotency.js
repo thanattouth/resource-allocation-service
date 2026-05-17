@@ -8,6 +8,7 @@ const {
   UpdateCommand,
   DeleteCommand
 } = require('@aws-sdk/lib-dynamodb');
+const { stableStringify } = require('./idempotency');
 
 const DEFAULT_TTL_HOURS = 24;
 
@@ -44,18 +45,24 @@ function getClient() {
   return documentClient;
 }
 
-async function claimIdempotencyRecord({ idempotencyKey, incidentId, requestFingerprint }) {
+async function claimIdempotencyRecord({ idempotencyKey, identifierContext, requestFingerprint }) {
   const client = getClient();
   const tableName = getTableName();
   const now = new Date();
   const expiresAt = Math.floor(now.getTime() / 1000) + (getTtlHours() * 60 * 60);
+  const normalizedIdentifierContext = {
+    incident_id: identifierContext?.incident_id || null,
+    request_id: identifierContext?.request_id || null
+  };
 
   try {
     await client.send(new PutCommand({
       TableName: tableName,
       Item: {
         idempotency_key: idempotencyKey,
-        incident_id: incidentId,
+        incident_id: normalizedIdentifierContext.incident_id,
+        request_id: normalizedIdentifierContext.request_id,
+        identifier_context: normalizedIdentifierContext,
         request_fingerprint: requestFingerprint,
         status: 'PROCESSING',
         created_at: now.toISOString(),
@@ -83,7 +90,15 @@ async function claimIdempotencyRecord({ idempotencyKey, incidentId, requestFinge
     return { kind: 'RETRY' };
   }
 
-  if (record.request_fingerprint !== requestFingerprint || record.incident_id !== incidentId) {
+  const existingIdentifierContext = {
+    incident_id: record.identifier_context?.incident_id ?? record.incident_id ?? null,
+    request_id: record.identifier_context?.request_id ?? record.request_id ?? null
+  };
+
+  if (
+    record.request_fingerprint !== requestFingerprint ||
+    stableStringify(existingIdentifierContext) !== stableStringify(normalizedIdentifierContext)
+  ) {
     return { kind: 'CONFLICT' };
   }
 

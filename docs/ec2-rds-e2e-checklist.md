@@ -1,176 +1,135 @@
-# EC2 to RDS End-to-End Checklist
+# EC2 / RDS End-to-End Checklist
 
-Use this checklist after deploying in AWS Learner Lab to confirm the app, RDS/PostGIS, and DynamoDB idempotency path are all working together.
+Use this after deploying the current Learner Lab stack.
 
-Quick run option:
+## Quick Commands
 
-```bash
-DISPATCHER_BEARER_TOKEN=... TELEMETRY_BEARER_TOKEN=... BASE_URL=http://<ec2-public-ip>:3000 npm run test:e2e:sync
-```
-
-## Before testing
-
-- Confirm EC2 is running and the app container is up
-- Confirm RDS security group allows inbound traffic from the EC2 security group
-- Confirm `.env` on EC2 includes:
-  - `DB_HOST`
-  - `DB_PORT`
-  - `DB_USER`
-  - `DB_PASSWORD`
-  - `DB_NAME`
-  - `AWS_REGION`
-  - `DYNAMODB_IDEMPOTENCY_TABLE`
-  - `DISPATCHER_BEARER_TOKEN`
-  - `TELEMETRY_BEARER_TOKEN` or `TELEMETRY_API_KEY`
-- Confirm the DynamoDB table exists and EC2 instance role can read/write it
-- Confirm PostGIS is enabled in the target database
-- Confirm all `resource_id` values are UUIDs
-
-## Basic health
+Sync validation:
 
 ```bash
-curl http://52.91.255.203:3000/health
+BASE_URL="http://<ec2-public-ip>:3000" \
+DISPATCHER_BEARER_TOKEN="..." \
+TELEMETRY_BEARER_TOKEN="..." \
+npm run test:e2e:sync
 ```
 
-Expected:
+Async validation:
+
+```bash
+BASE_URL="http://<ec2-public-ip>:3000" \
+DISPATCHER_BEARER_TOKEN="..." \
+TELEMETRY_BEARER_TOKEN="..." \
+SQS_POWERGRID_COMPLETED_URL="..." \
+npm run test:e2e:async
+```
+
+## Prerequisites
+
+- EC2 is up and the app container is running
+- RDS is reachable from the EC2 security group
+- DynamoDB table exists and the instance role can read/write it
+- PostGIS and `pgcrypto` are enabled in the target database
+- `.env` on EC2 includes the current runtime variables from [app/env.example](/Users/hamin/Documents/CS366/ResourceAllocationService/app/env.example)
+
+Useful minimum set:
+
+- `DB_HOST`
+- `DB_PORT`
+- `DB_USER`
+- `DB_PASSWORD`
+- `DB_NAME`
+- `AWS_REGION`
+- `DYNAMODB_IDEMPOTENCY_TABLE`
+- `DISPATCHER_BEARER_TOKEN`
+- `ALLOCATION_API_KEY`
+- `TELEMETRY_BEARER_TOKEN` or `TELEMETRY_API_KEY`
+
+Optional but flow-dependent:
+
+- `SHELTER_LOCATOR_BASE_URL`
+- `HOSPITAL_API_BASE_URL`
+- `SQS_POWERGRID_COMPLETED_URL`
+- `SQS_SHELTER_TRANSPORTING_URL`
+- `SQS_USER_LOCATION_REQUEST_COMPLETED_URL`
+- `SQS_INCIDENT_REPORTER_COMPLETED_URL`
+
+## What The Current E2E Scripts Cover
+
+### `test/e2e-sync.sh`
+
+- health check
+- nearby search
+- power-grid allocation and completion
+- request-only pickup allocation
+- pickup `ON_SITE -> EN_ROUTE -> ON_SITE` incident handoff
+- shelter transport start
+- shelter completion closeout
+
+### `test/e2e-async.sh`
+
+- power-generator allocation to a power node
+- `ON_SITE -> AVAILABLE` completion
+- polling SQS for `POWERGRID_COMPLETED`
+
+Optional queue checks for request and incident completion are performed only when the corresponding queue URLs are present.
+
+## Manual Spot Checks
+
+### 1. Health
+
+```bash
+curl "http://<ec2-public-ip>:3000/health"
+```
+
+Expect:
 
 - HTTP `200`
-- JSON with `status: "ok"`
-- `trace_id` present
+- `status: "ok"`
+- `trace_id`
 
-## 1. Search nearby resources
+### 2. Nearby
 
 ```bash
-curl "http://52.91.255.203:3000/v1/resources/nearby?lat=13.7563&long=100.5018&radius_km=5"
+curl "http://<ec2-public-ip>:3000/v1/resources/nearby?lat=13.7563&long=100.5018&radius_km=20" \
   -H "Authorization: Bearer ${DISPATCHER_BEARER_TOKEN}"
 ```
 
-Expected:
+Expect:
 
 - HTTP `200`
-- `count` and `resources` returned
-- Each resource has location and distance
+- resources and distance fields
 
-Checks:
-
-- DB connectivity works
-- PostGIS functions work
-- seeded resources are queryable
-
-## 2. Allocate resource with DynamoDB idempotency
+### 3. Resource Fetch
 
 ```bash
-curl -X POST "http://52.91.255.203:3000/v1/incidents/INC-2026-0001/allocations" \
-  -H "Authorization: Bearer ${DISPATCHER_BEARER_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -H "Idempotency-Key: 11111111-1111-1111-1111-111111111111" \
-  -d '{
-    "incident_location": { "lat": 13.7563, "long": 100.5018 },
-    "destination": {
-      "destination_type": "POWER_NODE",
-      "destination_id": "NODE-77",
-      "location": { "lat": 13.7601, "long": 100.5102 }
-    },
-    "severity": "HIGH",
-    "required_resource_type": "AMBULANCE_VAN",
-    "required_capabilities": ["AED"]
-  }'
+curl "http://<ec2-public-ip>:3000/v1/resources/<RESOURCE_UUID>" \
+  -H "Authorization: Bearer ${DISPATCHER_BEARER_TOKEN}"
 ```
 
-Expected:
-
-- HTTP `201`
-- `allocation_id` returned
-- `status` is `ASSIGNED`
-- `destination` returned and matches request
-- `trace_id` present
-
-Then send the exact same request again with the same `Idempotency-Key`.
-
-Expected:
-
-- same response should be replayed
-- no duplicate allocation should happen
-
-Checks:
-
-- app can read/write DynamoDB
-- idempotency record completes correctly
-- app can read/write RDS in one allocation flow
-
-## 3. Update telemetry
-
-Use the actual UUID `resource_id` returned from DB or from the allocation response context.
-
-```bash
-curl -X PATCH "http://52.91.255.203:3000/v1/resources/<RESOURCE_UUID>/telemetry" \
-  -H "Authorization: Bearer ${TELEMETRY_BEARER_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "version": 2,
-    "status": "ON_SITE",
-    "current_location": { "lat": 13.7580, "long": 100.5050 },
-    "battery_level": 82
-  }'
-```
-
-Expected:
+Expect:
 
 - HTTP `200`
-- updated `status`
-- incremented `version`
-- `trace_id` present
+- UUID resource
+- version
+- assignment and destination fields when active
 
-Checks:
+### 4. Transport Start
 
-- optimistic locking works
-- resource state persists in RDS
+For transport flows, expect either:
 
-## 4. Close-out flows (mission completed)
+- `200` + `PROCEED_TO_DESTINATION`
+- or `202` + `DESTINATION_PENDING`
 
-After `transport-start`, close evacuation by returning resource to `AVAILABLE`:
+## Database / Queue Validation
 
-```bash
-curl -X PATCH "http://52.91.255.203:3000/v1/resources/<RESOURCE_UUID>/telemetry" \
-  -H "Authorization: Bearer ${TELEMETRY_BEARER_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "version": <LATEST_VERSION_AFTER_TRANSPORT>,
-    "status": "AVAILABLE",
-    "current_location": { "lat": 13.7590, "long": 100.4850 },
-    "battery_level": 80
-  }'
-```
+After a run, confirm:
 
-For general missions (for example generator delivery), close directly after `ON_SITE`:
+- resource versions increment over time
+- `assigned_incident_id` and `assigned_request_id` are cleared after completion to `AVAILABLE`
+- power-grid completion messages appear on the power-grid queue when configured
+- request and incident completion messages appear after transport completion when configured
 
-```bash
-curl -X PATCH "http://52.91.255.203:3000/v1/resources/<RESOURCE_UUID>/telemetry" \
-  -H "Authorization: Bearer ${TELEMETRY_BEARER_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "version": <LATEST_VERSION_AFTER_ON_SITE>,
-    "status": "AVAILABLE",
-    "current_location": { "lat": 13.7611, "long": 100.5122 },
-    "battery_level": 68
-  }'
-```
+## Known Limits
 
-Expected:
-
-- HTTP `200`
-- `status` becomes `AVAILABLE`
-- `assigned_incident_id` is cleared in DB
-- `destination_location` is cleared in DB
-
-## Optional validation in AWS
-
-- Inspect DynamoDB table item for the test `Idempotency-Key`
-- Inspect the `resources` row in RDS after allocation, transport/general mission, and close-out
-- Confirm CloudWatch or container logs show no DB or DynamoDB errors
-
-## Known follow-up after this checklist
-
-- Add async publisher to SQS for `resource.events.powergrid_eta_updated`
-- Add async publisher to SQS for `resource.events.shelter_transporting`
-- Add automated integration tests that mock DynamoDB and DB boundaries
+- the E2E scripts hit real downstream services for shelter/hospital lookup behavior
+- local `npm test` is intentionally lighter and avoids binding a test server in restricted environments

@@ -23,8 +23,12 @@ DB_POOL_MAX=10
 AWS_REGION=${aws_region}
 DYNAMODB_IDEMPOTENCY_TABLE=${dynamodb_table_name}
 IDEMPOTENCY_TTL_HOURS=24
-SQS_POWERGRID_ETA_UPDATED_URL=${sqs_powergrid_eta_updated_url}
+SQS_POWERGRID_COMPLETED_URL=${sqs_powergrid_completed_url}
 SQS_SHELTER_TRANSPORTING_URL=${sqs_shelter_transporting_url}
+SQS_USER_LOCATION_REQUEST_COMPLETED_URL=${sqs_user_location_request_completed_url}
+SQS_INCIDENT_REPORTER_COMPLETED_URL=${sqs_incident_reporter_completed_url}
+SHELTER_LOCATOR_BASE_URL=${shelter_locator_base_url}
+HOSPITAL_API_BASE_URL=${hospital_api_base_url}
 EOF
 
 aws ecr get-login-password --region ${aws_region} | docker login --username AWS --password-stdin $(echo ${image_uri} | cut -d/ -f1)

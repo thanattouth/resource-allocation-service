@@ -28,14 +28,14 @@ resource "aws_security_group" "lambda_nearby" {
   }
 }
 
-resource "aws_security_group_rule" "allow_lambda_to_existing_rds" {
+resource "aws_security_group_rule" "allow_lambda_to_rds" {
   type                     = "ingress"
-  from_port                = var.existing_rds_port
-  to_port                  = var.existing_rds_port
+  from_port                = local.db_port
+  to_port                  = local.db_port
   protocol                 = "tcp"
-  security_group_id        = var.existing_rds_security_group_id
+  security_group_id        = local.db_security_group_id
   source_security_group_id = aws_security_group.lambda_nearby.id
-  description              = "Allow nearby Lambda to reach existing RDS"
+  description              = "Allow nearby Lambda to reach PostgreSQL RDS"
 }
 
 resource "aws_cloudwatch_log_group" "nearby_lambda" {
@@ -72,17 +72,17 @@ resource "aws_lambda_function" "nearby" {
   memory_size      = var.nearby_lambda_memory_mb
 
   vpc_config {
-    subnet_ids         = data.aws_subnets.default.ids
+    subnet_ids         = data.aws_subnets.default_all.ids
     security_group_ids = [aws_security_group.lambda_nearby.id]
   }
 
   environment {
     variables = {
-      DB_HOST                 = var.existing_rds_host
-      DB_PORT                 = tostring(var.existing_rds_port)
-      DB_NAME                 = var.existing_rds_name
-      DB_USER                 = var.existing_rds_username
-      DB_PASSWORD             = var.existing_rds_password
+      DB_HOST                 = local.db_host
+      DB_PORT                 = tostring(local.db_port)
+      DB_NAME                 = local.db_name
+      DB_USER                 = local.db_username
+      DB_PASSWORD             = local.db_password
       DB_SSL                  = var.lambda_db_ssl_enabled ? "true" : "false"
       DB_CONNECT_TIMEOUT      = tostring(var.lambda_db_connect_timeout_ms)
       DB_POOL_MAX             = tostring(var.lambda_db_pool_max)
@@ -94,7 +94,8 @@ resource "aws_lambda_function" "nearby" {
 
   depends_on = [
     aws_cloudwatch_log_group.nearby_lambda,
-    aws_security_group_rule.allow_lambda_to_existing_rds
+    aws_db_instance.app,
+    aws_security_group_rule.allow_lambda_to_rds
   ]
 }
 

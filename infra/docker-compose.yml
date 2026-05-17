@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgis/postgis:15-3.4-alpine
+    container_name: resource-allocation-db
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-disaster_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-disaster_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  app:
+    image: ${IMAGE_URI:-resource-allocation:latest}
+    container_name: resource-allocation-app
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-disaster_db}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      DB_SSL: "false"
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      DYNAMODB_IDEMPOTENCY_TABLE: ${DYNAMODB_IDEMPOTENCY_TABLE:-resource-allocation-idempotency}
+      IDEMPOTENCY_TTL_HOURS: ${IDEMPOTENCY_TTL_HOURS:-24}
+      DISPATCHER_BEARER_TOKEN: ${DISPATCHER_BEARER_TOKEN:-dispatcher-dev-token}
+      ALLOCATION_API_KEY: ${ALLOCATION_API_KEY:-allocation-upstream-key}
+      TELEMETRY_BEARER_TOKEN: ${TELEMETRY_BEARER_TOKEN:-telemetry-device-token}
+      TELEMETRY_API_KEY: ${TELEMETRY_API_KEY:-telemetry-device-key}
+      SQS_POWERGRID_COMPLETED_URL: ${SQS_POWERGRID_COMPLETED_URL}
+      SQS_SHELTER_TRANSPORTING_URL: ${SQS_SHELTER_TRANSPORTING_URL}
+      SQS_USER_LOCATION_REQUEST_COMPLETED_URL: ${SQS_USER_LOCATION_REQUEST_COMPLETED_URL}
+      SQS_INCIDENT_REPORTER_COMPLETED_URL: ${SQS_INCIDENT_REPORTER_COMPLETED_URL}
+      SHELTER_LOCATOR_BASE_URL: ${SHELTER_LOCATOR_BASE_URL}
+      HOSPITAL_API_BASE_URL: ${HOSPITAL_API_BASE_URL:-https://3w10sext9e.execute-api.us-east-1.amazonaws.com}
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - app-network
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  app-network:
+    driver: bridge

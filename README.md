@@ -1,62 +1,82 @@
 # Resource Allocation Service
 
-Resource Allocation microservice for disaster response scenarios. This service is designed to run in AWS Learner Lab with PostgreSQL/PostGIS on RDS.
+Resource Allocation Service for disaster-response scenarios in AWS Learner Lab. The current system combines:
 
-## Current API
+- an always-on Express app on EC2 for write-heavy workflows
+- PostgreSQL/PostGIS for resource state and geospatial search
+- DynamoDB for idempotency
+- SQS for downstream completion and transport events
+- a separate Lambda + API Gateway path for `GET /v1/resources/nearby`
+
+## Runtime Surface
+
+### App routes
 
 - `GET /health`
 - `GET /v1/resources/nearby`
+- `GET /v1/resources/:resource_id`
+- `POST /v1/allocations`
 - `POST /v1/incidents/:incident_id/allocations`
+- `POST /v1/requests/:request_id/allocations`
 - `POST /v1/resources/:resource_id/transport-start`
 - `PATCH /v1/resources/:resource_id/telemetry`
 
-## Required environment variables
+### Core behaviors
 
-See [app/env.example](/Users/hamin/Documents/CS366/ResourceAllocationService/app/env.example).
+- `resource_id` is always a UUID
+- all write flows require `Idempotency-Key`
+- allocation accepts either `incident_id`, `request_id`, or both
+- allocation supports `?dry_run=true`
+- pickup flows can retarget `ON_SITE -> EN_ROUTE` back to the stored incident location without a new destination payload
+- `transport-start` supports both `SHELTER_EVACUATION` and `HOSPITAL_TRANSFER`
+- telemetry completion can publish async events depending on the previous state and resource type
 
-## Local run
+## Auth Model
+
+- Dispatcher-only:
+  - `GET /v1/resources/nearby`
+  - `GET /v1/resources/:resource_id`
+  - `POST /v1/resources/:resource_id/transport-start`
+- Allocation:
+  - `Authorization: Bearer <DISPATCHER_BEARER_TOKEN>`
+  - or `Authorization: ApiKey <ALLOCATION_API_KEY>`
+- Telemetry:
+  - `Authorization: Bearer <TELEMETRY_BEARER_TOKEN>`
+  - or `Authorization: <TELEMETRY_API_KEY>`
+
+See [app/env.example](/Users/hamin/Documents/CS366/ResourceAllocationService/app/env.example) for the current environment surface.
+
+## Async Events
+
+Current publish paths in the app:
+
+- `SQS_POWERGRID_COMPLETED_URL` -> `POWERGRID_COMPLETED`
+- `SQS_SHELTER_TRANSPORTING_URL` -> `RESOURCE_TRANSPORTING_TO_SHELTER`
+- `SQS_USER_LOCATION_REQUEST_COMPLETED_URL` -> `REQUEST_COMPLETED`
+- `SQS_INCIDENT_REPORTER_COMPLETED_URL` -> `INCIDENT_COMPLETED`
+
+Notes:
+
+- request and incident completion events are published only when a completion transition comes from `TRANSPORTING`
+- power-grid completion is published for all `POWER_GENERATOR_TRUCK` completion transitions
+- shelter transporting is published only when `transport-start` found a shelter destination
+
+## Local Development
 
 ```bash
 npm install
 npm run init-db
+npm run check
+npm test
 npm start
 ```
 
-## Notes
+## Repo Guide
 
-- `POST /v1/incidents/:incident_id/allocations` supports `?dry_run=true`
-- Every response includes `trace_id`
-- `Idempotency-Key` is currently required on allocation requests
-- `POST /v1/resources/:resource_id/transport-start` is used for `ON_SITE -> TRANSPORTING` transitions
-- Idempotency records are stored in DynamoDB via `DYNAMODB_IDEMPOTENCY_TABLE`
-- Allocation publish path supports SQS async event `resource.events.powergrid_eta_updated` via `SQS_POWERGRID_ETA_UPDATED_URL`
-- Transport start publish path supports SQS async event `resource.events.shelter_transporting` via `SQS_SHELTER_TRANSPORTING_URL`
-- Allocation endpoint accepts either `Authorization: Bearer <DISPATCHER_BEARER_TOKEN>` or `Authorization: ApiKey <ALLOCATION_API_KEY>`
-- Nearby and transport-start endpoints require `Authorization: Bearer <DISPATCHER_BEARER_TOKEN>`
-- Telemetry endpoint requires either `Authorization: Bearer <TELEMETRY_BEARER_TOKEN>` or `Authorization: <TELEMETRY_API_KEY>`
-- `resource_id` is locked to UUID format across the service contract and runtime validation
-
-## Out of Scope
-
-This service is responsible only for resource discovery, allocation decisions, and resource telemetry updates.
-
-The following capabilities are explicitly out of scope:
-
-- Creating or managing incident records
-- Dispatching notifications or communication to responders
-- Managing shelter master data, hospital master data, or destination capacity
-- User accounts, authentication, or role management
-- Cross-service reporting, analytics, or command-center dashboards
-- Long-term route planning or navigation guidance for vehicles
-- Direct control of IoT devices beyond accepting telemetry updates
-
-This service may consume destination recommendations from downstream services for transport scenarios, but it does not own or manage those destination domains.
-
-## Architecture Notes
-
-- [Session 1 Remediation Log](/Users/hamin/Documents/CS366/ResourceAllocationService/docs/remediation-log-session1.md)
-- [Sync Call Policy](/Users/hamin/Documents/CS366/ResourceAllocationService/docs/sync-call-policy.md)
-- [Self-Review vs Implementation Notes](/Users/hamin/Documents/CS366/ResourceAllocationService/docs/self-review-implementation-notes.md)
-- [Infra Bootstrap](/Users/hamin/Documents/CS366/ResourceAllocationService/infra/README.md)
-- [PowerGrid Consumer Guide](/Users/hamin/Documents/CS366/ResourceAllocationService/docs/powergrid-consumer-guide.md)
-- EC2 to RDS validation should cover `GET /v1/resources/nearby`, `POST /v1/incidents/:incident_id/allocations`, `POST /v1/resources/:resource_id/transport-start`, and `PATCH /v1/resources/:resource_id/telemetry`
+- App runtime: [app/main.js](/Users/hamin/Documents/CS366/ResourceAllocationService/app/main.js)
+- Deployment infra: [infra/README.md](/Users/hamin/Documents/CS366/ResourceAllocationService/infra/README.md)
+- Runtime flows and event rules: [docs/runtime-flows.md](/Users/hamin/Documents/CS366/ResourceAllocationService/docs/runtime-flows.md)
+- AWS rebuild steps: [docs/new-learner-lab-rebuild.md](/Users/hamin/Documents/CS366/ResourceAllocationService/docs/new-learner-lab-rebuild.md)
+- Nearby Lambda deployment notes: [docs/nearby-lambda-migration.md](/Users/hamin/Documents/CS366/ResourceAllocationService/docs/nearby-lambda-migration.md)
+- E2E checklist: [docs/ec2-rds-e2e-checklist.md](/Users/hamin/Documents/CS366/ResourceAllocationService/docs/ec2-rds-e2e-checklist.md)
+- Async consumer contracts: [docs/async-events.md](/Users/hamin/Documents/CS366/ResourceAllocationService/docs/async-events.md)

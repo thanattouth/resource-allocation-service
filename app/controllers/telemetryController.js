@@ -3,13 +3,23 @@ const { RESOURCE_STATUSES } = require('../utils/constants');
 const { isDatabaseTimeoutError, runInStatementTimeoutSession } = require('../utils/db');
 const { parseCoordinate, sendError, sendTimeoutError } = require('../utils/http');
 const {
-    calculateDistanceKm,
-    calculateEstimatedArrivalTimeMinutes,
-    shouldPublishEtaUpdate
-} = require('../domain/allocation');
-const { publishPowerGridEtaUpdatedEvent } = require('../utils/eventPublisher');
+    publishIncidentCompletedEvent,
+    publishPowerGridCompletedEvent,
+    publishRequestCompletedEvent
+} = require('../utils/eventPublisher');
 const { validateStatusTransition } = require('../domain/resourceState');
 const { isUuidResourceId } = require('../utils/resourceId');
+
+function isCompletionTransition(previousStatus, nextStatus) {
+    if (!nextStatus) {
+        return false;
+    }
+
+    const completionStatuses = ['RETURNING', 'AVAILABLE'];
+    const activeCompletionOrigins = ['ON_SITE', 'TRANSPORTING'];
+
+    return completionStatuses.includes(nextStatus) && activeCompletionOrigins.includes(previousStatus);
+}
 
 async function updateTelemetry(req, res) {
     const { resource_id } = req.params;
@@ -18,12 +28,16 @@ async function updateTelemetry(req, res) {
         battery_level,
         version,
         current_location,
+        location,
         lat,
-        long
+        long,
+        destination
     } = req.body;
 
-    const currentLat = parseCoordinate(current_location?.lat ?? lat);
-    const currentLong = parseCoordinate(current_location?.long ?? long);
+    const currentLat = parseCoordinate(current_location?.lat ?? location?.lat ?? lat);
+    const currentLong = parseCoordinate(current_location?.long ?? location?.long ?? long);
+    const destinationLat = parseCoordinate(destination?.location?.lat);
+    const destinationLong = parseCoordinate(destination?.location?.long);
     const battery = battery_level === undefined || battery_level === null
         ? null
         : Number.parseFloat(battery_level);
@@ -93,7 +107,7 @@ async function updateTelemetry(req, res) {
             const existingResourceResult = await client.query(
                 `
                     SELECT resource_id, status, assigned_incident_id, destination_location, version,
-                           destination_type, destination_id, destination_name, resource_type,
+                           assigned_request_id, destination_type, destination_id, destination_name, resource_type,
                            CASE
                                WHEN current_location IS NOT NULL THEN json_build_object(
                                    'lat', ST_Y(current_location::geometry),
@@ -107,7 +121,14 @@ async function updateTelemetry(req, res) {
                                    'long', ST_X(destination_location::geometry)
                                )
                                ELSE NULL
-                           END AS destination_location_point
+                           END AS destination_location_point,
+                           CASE
+                               WHEN incident_location IS NOT NULL THEN json_build_object(
+                                   'lat', ST_Y(incident_location::geometry),
+                                   'long', ST_X(incident_location::geometry)
+                               )
+                               ELSE NULL
+                           END AS incident_location_point
                     FROM resources
                     WHERE resource_id = $1::uuid
                 `,
@@ -143,25 +164,67 @@ async function updateTelemetry(req, res) {
                 };
             }
 
+            const hasNewDestination = destination && destination.destination_type &&
+                destinationLat !== null && destinationLong !== null;
+
+            // Volunteer / supply pickup flow: ON_SITE -> EN_ROUTE without new destination
+            // means go to incident_location
+            const isPickupToIncident = !!(status === 'EN_ROUTE' &&
+                currentResource.status === 'ON_SITE' &&
+                (currentResource.destination_type === 'PICKUP_VOLUNTEER' ||
+                 currentResource.destination_type === 'PICKUP_SUPPLY') &&
+                !hasNewDestination &&
+                currentResource.incident_location_point);
+
+            const pickupIncidentLat = isPickupToIncident
+                ? currentResource.incident_location_point.lat : null;
+            const pickupIncidentLong = isPickupToIncident
+                ? currentResource.incident_location_point.long : null;
+
             const query = `
                 UPDATE resources SET
                     status = COALESCE($1, status),
                     current_location = CASE
                         WHEN $2::float8 IS NOT NULL AND $3::float8 IS NOT NULL
                         THEN ST_SetSRID(ST_MakePoint($3::float8, $2::float8), 4326)::geography
+                        WHEN destination_location IS NOT NULL
+                        THEN destination_location
                         ELSE current_location
                     END,
                     battery_level = COALESCE($4::float8, battery_level),
                     assigned_incident_id = CASE WHEN $1 = 'AVAILABLE' THEN NULL ELSE assigned_incident_id END,
-                    destination_location = CASE WHEN $1 = 'AVAILABLE' THEN NULL ELSE destination_location END,
-                    destination_type = CASE WHEN $1 = 'AVAILABLE' THEN NULL ELSE destination_type END,
-                    destination_id = CASE WHEN $1 = 'AVAILABLE' THEN NULL ELSE destination_id END,
-                    destination_name = CASE WHEN $1 = 'AVAILABLE' THEN NULL ELSE destination_name END,
+                    assigned_request_id = CASE WHEN $1 = 'AVAILABLE' THEN NULL ELSE assigned_request_id END,
+                    destination_location = CASE
+                        WHEN $1 = 'AVAILABLE' THEN NULL
+                        WHEN $7::boolean = true AND $8::float8 IS NOT NULL AND $9::float8 IS NOT NULL
+                        THEN ST_SetSRID(ST_MakePoint($9::float8, $8::float8), 4326)::geography
+                        WHEN $13::boolean = true AND $14::float8 IS NOT NULL AND $15::float8 IS NOT NULL
+                        THEN ST_SetSRID(ST_MakePoint($15::float8, $14::float8), 4326)::geography
+                        ELSE destination_location
+                    END,
+                    destination_type = CASE
+                        WHEN $1 = 'AVAILABLE' THEN NULL
+                        WHEN $7::boolean = true THEN $10
+                        WHEN $13::boolean = true THEN 'INCIDENT'
+                        ELSE destination_type
+                    END,
+                    destination_id = CASE
+                        WHEN $1 = 'AVAILABLE' THEN NULL
+                        WHEN $7::boolean = true THEN COALESCE($11, destination_id)
+                        WHEN $13::boolean = true THEN assigned_incident_id
+                        ELSE destination_id
+                    END,
+                    destination_name = CASE
+                        WHEN $1 = 'AVAILABLE' THEN NULL
+                        WHEN $7::boolean = true THEN COALESCE($12, destination_name)
+                        ELSE destination_name
+                    END,
+                    incident_location = CASE WHEN $1 = 'AVAILABLE' THEN NULL ELSE incident_location END,
                     last_updated_at = CURRENT_TIMESTAMP,
                     version = version + 1
                 WHERE resource_id = $5::uuid AND version = $6::int
                 RETURNING resource_id, status, battery_level, version, last_updated_at,
-                          assigned_incident_id, destination_type, destination_id, destination_name,
+                          assigned_incident_id, assigned_request_id, destination_type, destination_id, destination_name,
                           resource_type,
                           CASE
                               WHEN current_location IS NOT NULL THEN json_build_object(
@@ -185,7 +248,16 @@ async function updateTelemetry(req, res) {
                 currentLong,
                 battery,
                 resource_id,
-                Number(version)
+                Number(version),
+                hasNewDestination,
+                destinationLat,
+                destinationLong,
+                hasNewDestination ? destination.destination_type : null,
+                hasNewDestination ? (destination.destination_id || null) : null,
+                hasNewDestination ? (destination.destination_name || null) : null,
+                isPickupToIncident,
+                pickupIncidentLat,
+                pickupIncidentLong
             ]);
 
             if (result.rowCount === 0) {
@@ -213,44 +285,67 @@ async function updateTelemetry(req, res) {
         }
 
         const updated = outcome.payload;
-        const shouldEvaluatePowerGridEta =
-            updated.status === 'EN_ROUTE' &&
-            updated.destination_type === 'POWER_NODE' &&
-            updated.destination_id &&
-            updated.destination_location_point;
 
-        if (shouldEvaluatePowerGridEta) {
-            const previousDistanceKm = calculateDistanceKm(
-                outcome.previousResource?.current_location_point,
-                outcome.previousResource?.destination_location_point
-            );
-            const nextDistanceKm = calculateDistanceKm(
-                updated.current_location_point,
-                updated.destination_location_point
-            );
-            const previousEtaMinutes = calculateEstimatedArrivalTimeMinutes(previousDistanceKm);
-            const nextEtaMinutes = calculateEstimatedArrivalTimeMinutes(nextDistanceKm);
+        const completionTransition = isCompletionTransition(
+            outcome.previousResource?.status,
+            updated.status
+        );
 
-            if (shouldPublishEtaUpdate(previousEtaMinutes, nextEtaMinutes)) {
+        const publishedEvents = [];
+
+        if (completionTransition) {
+            const completionEventInput = {
+                incidentId: outcome.previousResource?.assigned_incident_id,
+                requestId: outcome.previousResource?.assigned_request_id,
+                resourceId: updated.resource_id,
+                resourceType: updated.resource_type,
+                finalStatus: updated.status,
+                completedAt: updated.last_updated_at,
+                destination: outcome.previousResource?.destination_id
+                    ? {
+                        destination_type: outcome.previousResource.destination_type,
+                        destination_id: outcome.previousResource.destination_id,
+                        destination_name: outcome.previousResource.destination_name || undefined,
+                        shelter_id: outcome.previousResource.destination_type === 'SHELTER'
+                            ? outcome.previousResource.destination_id
+                            : undefined
+                    }
+                    : undefined
+            };
+
+            // Only publish REQUEST_COMPLETED and INCIDENT_COMPLETED when coming from
+            // TRANSPORTING status (i.e. after transport-start shelter evacuation)
+            const isTransportCompletion = outcome.previousResource?.status === 'TRANSPORTING';
+
+            if (isTransportCompletion && completionEventInput.requestId) {
                 try {
-                    await publishPowerGridEtaUpdatedEvent(
-                        {
-                            incidentId: updated.assigned_incident_id,
-                            allocationId: null,
-                            resourceId: updated.resource_id,
-                            resourceType: updated.resource_type,
-                            destination: {
-                                destination_type: updated.destination_type,
-                                destination_id: updated.destination_id,
-                                destination_name: updated.destination_name || undefined
-                            },
-                            status: updated.status,
-                            etaMinutes: nextEtaMinutes
-                        },
-                        { traceId: req.traceId }
-                    );
+                    await publishRequestCompletedEvent(completionEventInput, { traceId: req.traceId });
+                    publishedEvents.push({ event_type: 'REQUEST_COMPLETED', status: 'PUBLISHED' });
                 } catch (publishError) {
-                    console.error('[telemetry] Failed to publish powergrid ETA event:', publishError.message);
+                    console.error('[telemetry] Failed to publish request completion event:', publishError.message);
+                    publishedEvents.push({ event_type: 'REQUEST_COMPLETED', status: 'FAILED', error: publishError.message });
+                }
+            }
+
+            if (isTransportCompletion && completionEventInput.incidentId) {
+                try {
+                    await publishIncidentCompletedEvent(completionEventInput, { traceId: req.traceId });
+                    publishedEvents.push({ event_type: 'INCIDENT_COMPLETED', status: 'PUBLISHED' });
+                } catch (publishError) {
+                    console.error('[telemetry] Failed to publish incident completion event:', publishError.message);
+                    publishedEvents.push({ event_type: 'INCIDENT_COMPLETED', status: 'FAILED', error: publishError.message });
+                }
+            }
+
+            // Publish POWERGRID_COMPLETED for all POWER_GENERATOR_TRUCK completions
+            // regardless of destination_type (POWER_NODE or PICKUP_VOLUNTEER)
+            if (updated.resource_type === 'POWER_GENERATOR_TRUCK') {
+                try {
+                    await publishPowerGridCompletedEvent(completionEventInput, { traceId: req.traceId });
+                    publishedEvents.push({ event_type: 'POWERGRID_COMPLETED', status: 'PUBLISHED' });
+                } catch (publishError) {
+                    console.error('[telemetry] Failed to publish powergrid completion event:', publishError.message);
+                    publishedEvents.push({ event_type: 'POWERGRID_COMPLETED', status: 'FAILED', error: publishError.message });
                 }
             }
         }
@@ -261,7 +356,8 @@ async function updateTelemetry(req, res) {
             server_instruction: 'CONTINUE',
             version: updated.version,
             last_updated_at: updated.last_updated_at,
-            trace_id: req.traceId
+            trace_id: req.traceId,
+            ...(publishedEvents.length > 0 && { published_events: publishedEvents })
         });
 
     } catch (err) {
@@ -281,7 +377,7 @@ async function updateTelemetry(req, res) {
             500,
             req.traceId,
             'TELEMETRY_UPDATE_FAILED',
-            'Unable to update telemetry at this time.'
+            `Unable to update telemetry: ${err.message}`
         );
     }
 }

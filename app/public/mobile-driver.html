@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Driver App - รถกู้ภัย</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Prompt', sans-serif; touch-action: manipulation; }
+        .status-dot { animation: pulse 2s infinite; }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .btn-press:active { transform: scale(0.96); }
+        .slide-in { animation: slideIn 0.3s ease-out; }
+        @keyframes slideIn {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        .log-entry { border-left: 3px solid transparent; }
+        .log-success { border-left-color: #10b981; }
+        .log-error { border-left-color: #ef4444; }
+        .log-info { border-left-color: #3b82f6; }
+    </style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+    <!-- Login Screen -->
+    <div id="loginScreen" class="p-6 flex flex-col justify-center min-h-screen">
+        <div class="text-center mb-8">
+            <div class="w-20 h-20 bg-blue-600 rounded-2xl mx-auto flex items-center justify-center mb-4 shadow-lg shadow-blue-500/30">
+                <svg class="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                </svg>
+            </div>
+            <h1 class="text-2xl font-bold mb-1">รถกู้ภัย</h1>
+            <p class="text-gray-400 text-sm">ระบบจัดการภารกิจกู้ภัย</p>
+        </div>
+        
+        <div class="space-y-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-1">API Server URL</label>
+                <input id="serverUrl" type="text" value="http://34.231.230.71:3000"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-1">Dispatcher Token (สำหรับดูสถานะ)</label>
+                <input id="dispatcherToken" type="text" value="dispatcher-dev-token"
+                       placeholder="dispatcher-dev-token"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-1">Telemetry Token (สำหรับอัปเดตตำแหน่ง)</label>
+                <input id="telemetryToken" type="text" value="telemetry-device-token"
+                       placeholder="telemetry-device-token"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-1">Resource ID</label>
+                <input id="resourceId" type="text" placeholder="fcee35bb-fcaf-4790-aff5-827e543e01b7"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+            <button onclick="login()" 
+                class="btn-press w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-4 rounded-xl transition-colors shadow-lg shadow-blue-500/25">
+                เข้าสู่ระบบ
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Dashboard -->
+    <div id="dashboard" class="hidden">
+        <!-- Header -->
+        <div class="bg-gray-800 border-b border-gray-700 px-4 py-3 sticky top-0 z-10">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div id="statusIndicator" class="w-3 h-3 rounded-full bg-gray-500 status-dot"></div>
+                    <div>
+                        <div class="text-sm font-semibold" id="statusText">โหลดข้อมูล...</div>
+                        <div class="text-xs text-gray-400" id="resourceType">-</div>
+                    </div>
+                </div>
+                <button onclick="logout()" class="text-gray-400 hover:text-white p-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Mission Info -->
+        <div class="p-4">
+            <div class="bg-gray-800 rounded-2xl p-4 border border-gray-700 mb-4">
+                <div class="flex items-center justify-between mb-3">
+                    <span class="text-xs font-medium text-gray-400 uppercase tracking-wider">ภารกิจปัจจุบัน</span>
+                    <span id="versionBadge" class="text-xs bg-gray-700 text-gray-300 px-2 py-1 rounded-lg">v-</span>
+                </div>
+                <div id="missionInfo" class="text-sm text-gray-300">
+                    ไม่มีภารกิจ
+                </div>
+                <div id="destinationInfo" class="mt-2 text-sm text-blue-400 hidden">
+                    <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
+                    </svg>
+                    <span id="destinationText">-</span>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="space-y-3" id="actionButtons">
+                <!-- Dynamic buttons based on status -->
+            </div>
+
+            <!-- Current Location -->
+            <div class="bg-gray-800 rounded-2xl p-4 border border-gray-700 mt-4">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs font-medium text-gray-400 uppercase tracking-wider">ตำแหน่งปัจจุบัน</span>
+                    <button onclick="getCurrentLocation()" class="text-blue-400 text-xs flex items-center gap-1">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/>
+                        </svg>
+                        อัปเดต
+                    </button>
+                </div>
+                <div id="currentLocation" class="text-sm text-gray-300 font-mono">-</div>
+                <div class="mt-2 text-xs text-gray-500">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="autoLocation" checked class="rounded bg-gray-700 border-gray-600">
+                        อัปเดตตำแหน่งอัตโนมัติทุกครั้ง
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Activity Log -->
+        <div class="p-4 border-t border-gray-700">
+            <div class="flex items-center justify-between mb-3">
+                <span class="text-xs font-medium text-gray-400 uppercase tracking-wider">บันทึกกิจกรรม</span>
+                <button onclick="clearLog()" class="text-xs text-gray-500 hover:text-gray-300">ล้าง</button>
+            </div>
+            <div id="activityLog" class="space-y-2 max-h-64 overflow-y-auto text-sm">
+                <!-- Logs will appear here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Passenger Count Modal -->
+    <div id="passengerModal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-2xl p-6 w-full max-w-sm border border-gray-700">
+            <h3 class="text-lg font-semibold mb-4">จำนวนผู้โดยสาร</h3>
+            <div class="flex items-center justify-center gap-4 mb-6">
+                <button onclick="adjustPassenger(-1)" class="w-12 h-12 bg-gray-700 rounded-xl flex items-center justify-center text-2xl hover:bg-gray-600">-</button>
+                <input id="passengerCount" type="number" value="1" min="1" max="50"
+                    class="w-20 bg-gray-900 border border-gray-700 rounded-xl px-3 py-2 text-center text-2xl font-bold">
+                <button onclick="adjustPassenger(1)" class="w-12 h-12 bg-gray-700 rounded-xl flex items-center justify-center text-2xl hover:bg-gray-600">+</button>
+            </div>
+            <div class="flex gap-3">
+                <button onclick="closePassengerModal()" class="flex-1 bg-gray-700 hover:bg-gray-600 py-3 rounded-xl transition-colors">ยกเลิก</button>
+                <button onclick="confirmTransportAction()" class="flex-1 bg-blue-600 hover:bg-blue-500 py-3 rounded-xl transition-colors font-semibold">ยืนยัน</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let config = { serverUrl: '', dispatcherToken: '', telemetryToken: '', resourceId: '' };
+        let state = { status: '', version: 0, destinationType: '', destinationName: '', lat: 0, long: 0, incidentId: '', requestId: '', resourceType: '' };
+        let pendingAction = null;
+
+        function login() {
+            config.serverUrl = document.getElementById('serverUrl').value.replace(/\/$/, '');
+            config.dispatcherToken = document.getElementById('dispatcherToken').value;
+            config.telemetryToken = document.getElementById('telemetryToken').value;
+            config.resourceId = document.getElementById('resourceId').value;
+            if (!config.resourceId) { alert('กรุณาใส่ Resource ID'); return; }
+            document.getElementById('loginScreen').classList.add('hidden');
+            document.getElementById('dashboard').classList.remove('hidden');
+            getCurrentLocation();
+            fetchStatus();
+        }
+
+        function logout() {
+            document.getElementById('dashboard').classList.add('hidden');
+            document.getElementById('loginScreen').classList.remove('hidden');
+        }
+
+        async function api(method, path, body = null, useTelemetryToken = false) {
+            const url = `${config.serverUrl}${path}`;
+            const token = useTelemetryToken ? config.telemetryToken : config.dispatcherToken;
+            const opts = {
+                method,
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                }
+            };
+            if (body) opts.body = JSON.stringify(body);
+            try {
+                const res = await fetch(url, opts);
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
+                return data;
+            } catch (e) {
+                throw e;
+            }
+        }
+
+        function log(msg, type = 'info') {
+            const div = document.createElement('div');
+            div.className = `log-entry log-${type} bg-gray-800/50 rounded-lg p-2 text-xs slide-in`;
+            const time = new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            div.innerHTML = `<span class="text-gray-500">${time}</span> ${msg}`;
+            const container = document.getElementById('activityLog');
+            container.insertBefore(div, container.firstChild);
+        }
+
+        function clearLog() { document.getElementById('activityLog').innerHTML = ''; }
+
+        function getStatusColor(status) {
+            const colors = {
+                AVAILABLE: 'bg-green-500',
+                EN_ROUTE: 'bg-blue-500',
+                ON_SITE: 'bg-yellow-500',
+                TRANSPORTING: 'bg-purple-500',
+                RETURNING: 'bg-orange-500',
+                ASSIGNED: 'bg-cyan-500'
+            };
+            return colors[status] || 'bg-gray-500';
+        }
+
+        function getStatusLabel(status) {
+            const labels = {
+                AVAILABLE: 'ว่าง',
+                EN_ROUTE: 'กำลังเดินทาง',
+                ON_SITE: 'ถึงที่หมาย',
+                TRANSPORTING: 'ขนส่ง',
+                RETURNING: 'กลับ',
+                ASSIGNED: 'ได้รับมอบหมาย'
+            };
+            return labels[status] || status;
+        }
+
+        async function fetchStatus() {
+            try {
+                const data = await api('GET', `/v1/resources/${config.resourceId}`);
+                state.status = data.status;
+                state.version = data.version;
+                state.destinationType = data.destination_type;
+                state.destinationName = data.destination_name;
+                state.incidentId = data.assigned_incident_id || '';
+                state.requestId = data.assigned_request_id || '';
+                state.resourceType = data.resource_type || '';
+                
+                document.getElementById('statusIndicator').className = `w-3 h-3 rounded-full ${getStatusColor(data.status)} status-dot`;
+                document.getElementById('statusText').textContent = getStatusLabel(data.status);
+                document.getElementById('resourceType').textContent = data.resource_type || 'รถกู้ภัย';
+                document.getElementById('versionBadge').textContent = `v${data.version}`;
+                
+                const missionEl = document.getElementById('missionInfo');
+                if (data.assigned_incident_id) {
+                    missionEl.innerHTML = `<div class="font-medium">เหตุ: ${data.assigned_incident_id}</div><div class="text-gray-400">คำขอ: ${data.assigned_request_id || '-'}</div>`;
+                } else if (data.assigned_request_id) {
+                    missionEl.innerHTML = `<div class="font-medium">คำขอ: ${data.assigned_request_id}</div><div class="text-gray-400">(ไม่มีรหัสเหตุ)</div>`;
+                } else {
+                    missionEl.textContent = 'ไม่มีภารกิจ';
+                }
+                
+                const destEl = document.getElementById('destinationInfo');
+                if (data.destination_type) {
+                    destEl.classList.remove('hidden');
+                    document.getElementById('destinationText').textContent = `${data.destination_type}: ${data.destination_name || data.destination_id || '-'}`;
+                } else {
+                    destEl.classList.add('hidden');
+                }
+                
+                renderButtons(data.status, data.destination_type, data.resource_type);
+                log(`อัปเดตสถานะ: ${getStatusLabel(data.status)} (v${data.version})`, 'info');
+            } catch (e) {
+                log(`โหลดสถานะล้มเหลว: ${e.message}`, 'error');
+            }
+        }
+
+        function renderButtons(status, destType, resourceType) {
+            const container = document.getElementById('actionButtons');
+            container.innerHTML = '';
+            
+            const btnClass = 'btn-press w-full py-4 rounded-xl font-semibold text-white transition-all shadow-lg flex items-center justify-center gap-2';
+            const isPowerTruck = resourceType === 'POWER_GENERATOR_TRUCK';
+            const isSupplyTruck = resourceType === 'SUPPLY_TRUCK' || resourceType === 'DONATION_TRUCK';
+            const isDirectCompletion = isPowerTruck || isSupplyTruck;
+            // RESCUE_BOAT and AMBULANCE_VAN follow shelter flow (not direct completion)
+            const isShelterFlow = resourceType === 'RESCUE_BOAT' || resourceType === 'AMBULANCE_VAN' || 
+                                  (!isDirectCompletion && destType !== 'PICKUP_VOLUNTEER' && destType !== 'PICKUP_SUPPLY');
+            
+            if (status === 'AVAILABLE') {
+                container.innerHTML = `<div class="text-center text-gray-400 py-4">รอรับภารกิจ...</div>`;
+            } else if (status === 'ASSIGNED' || status === 'EN_ROUTE') {
+                // Support PICKUP_VOLUNTEER and PICKUP_SUPPLY flows
+                let label;
+                if (destType === 'PICKUP_VOLUNTEER') {
+                    label = 'ถึงจุดรับอาสา';
+                } else if (destType === 'PICKUP_SUPPLY') {
+                    label = 'ถึงคลังสินค้า';
+                } else {
+                    label = 'ถึงที่เกิดเหตุ';
+                }
+                container.innerHTML = `<button onclick="updateStatus('ON_SITE')" class="${btnClass} bg-yellow-600 hover:bg-yellow-500 shadow-yellow-500/25">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/></svg>
+                    ${label}
+                </button>`;
+            } else if (status === 'ON_SITE') {
+                if (destType === 'PICKUP_VOLUNTEER' || destType === 'PICKUP_SUPPLY') {
+                    // PICKUP_VOLUNTEER and PICKUP_SUPPLY flows: ON_SITE -> EN_ROUTE -> ON_SITE -> AVAILABLE
+                    const nextLabel = destType === 'PICKUP_SUPPLY' ? 'เดินทางไปส่งของ' : 'เดินทางไปเหตุ';
+                    container.innerHTML = `<button onclick="updateStatus('EN_ROUTE')" class="${btnClass} bg-blue-600 hover:bg-blue-500 shadow-blue-500/25">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
+                        ${nextLabel}
+                    </button>`;
+                } else if (isDirectCompletion) {
+                    // Power truck & Supply truck without volunteer pickup: ON_SITE -> AVAILABLE directly
+                    const label = isPowerTruck ? 'เสร็จงาน (Power)' : 'เสร็จงาน (Donation)';
+                    container.innerHTML = `<button onclick="updateStatus('AVAILABLE')" class="${btnClass} bg-green-600 hover:bg-green-500 shadow-green-500/25">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                        ${label}
+                    </button>`;
+                } else {
+                    // RESCUE_BOAT, AMBULANCE_VAN, HELICOPTER: Show both Shelter and Hospital options
+                    const supportsHospital = resourceType === 'AMBULANCE_VAN' || 
+                                            resourceType === 'RESCUE_BOAT' || 
+                                            resourceType === 'HELICOPTER';
+                    const shelterBtn = `<button onclick="openTransportModal()" class="${btnClass} bg-purple-600 hover:bg-purple-500 shadow-purple-500/25">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+                        ไป Shelter
+                    </button>`;
+                    const hospitalBtn = `<button onclick="openHospitalTransportModal()" class="${btnClass} bg-red-600 hover:bg-red-500 shadow-red-500/25 mt-2">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z M19 21v-2a2 2 0 00-2-2H7a2 2 0 00-2 2v2"/></svg>
+                        ไปโรงพยาบาล
+                    </button>`;
+                    // Show both buttons for AMBULANCE_VAN, RESCUE_BOAT, HELICOPTER
+                    container.innerHTML = supportsHospital ? (shelterBtn + hospitalBtn) : shelterBtn;
+                }
+            } else if (status === 'TRANSPORTING') {
+                container.innerHTML = `<button onclick="updateStatus('AVAILABLE')" class="${btnClass} bg-green-600 hover:bg-green-500 shadow-green-500/25">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                    เสร็จงาน
+                </button>`;
+            }
+        }
+
+        function getCurrentLocation() {
+            if (!navigator.geolocation) {
+                state.lat = 13.7800; state.long = 100.5200;
+                document.getElementById('currentLocation').textContent = `${state.lat.toFixed(4)}, ${state.long.toFixed(4)} (default)`;
+                return;
+            }
+            navigator.geolocation.getCurrentPosition(
+                pos => {
+                    state.lat = pos.coords.latitude;
+                    state.long = pos.coords.longitude;
+                    document.getElementById('currentLocation').textContent = `${state.lat.toFixed(6)}, ${state.long.toFixed(6)}`;
+                    log(`ตำแหน่ง: ${state.lat.toFixed(4)}, ${state.long.toFixed(4)}`, 'info');
+                },
+                err => {
+                    state.lat = 13.7800; state.long = 100.5200;
+                    document.getElementById('currentLocation').textContent = `${state.lat.toFixed(4)}, ${state.long.toFixed(4)} (default)`;
+                    log('ใช้ตำแหน่งเริ่มต้น (GPS ไม่พร้อม)', 'error');
+                }
+            );
+        }
+
+        async function updateStatus(newStatus) {
+            const autoLoc = document.getElementById('autoLocation').checked;
+            if (autoLoc) getCurrentLocation();
+
+            const body = {
+                status: newStatus,
+                version: state.version
+            };
+            // ไม่ส่งพิกัดไปให้ถ้าเป็นการถึงที่หมาย เพื่อให้ Backend จัดการ Snap ไปที่เป้าหมายอัตโนมัติ
+            if (state.lat && state.long && newStatus !== 'ON_SITE' && newStatus !== 'AVAILABLE') {
+                body.location = { lat: state.lat, long: state.long };
+            }
+
+            try {
+                const data = await api('PATCH', `/v1/resources/${config.resourceId}/telemetry`, body, true);
+                state.version = data.version;
+                state.status = data.status;
+                log(`${getStatusLabel(newStatus)} สำเร็จ (v${data.version})`, 'success');
+                if (data.published_events) {
+                    data.published_events.forEach(ev => log(`Event: ${ev.event_type} - ${ev.status}`, 'success'));
+                }
+                fetchStatus();
+            } catch (e) {
+                log(`${getStatusLabel(newStatus)} ล้มเหลว: ${e.message}`, 'error');
+            }
+        }
+
+        function openTransportModal() {
+            pendingAction = 'transport';
+            document.getElementById('passengerModal').classList.remove('hidden');
+            // Reset modal title for shelter
+            const modalTitle = document.querySelector('#passengerModal h3');
+            if (modalTitle) modalTitle.textContent = 'จำนวนผู้โดยสาร';
+        }
+
+        function closePassengerModal() {
+            document.getElementById('passengerModal').classList.add('hidden');
+            pendingAction = null;
+        }
+
+        function adjustPassenger(delta) {
+            const input = document.getElementById('passengerCount');
+            let val = parseInt(input.value) + delta;
+            if (val < 1) val = 1;
+            if (val > 50) val = 50;
+            input.value = val;
+        }
+
+        async function confirmTransport() {
+            const count = parseInt(document.getElementById('passengerCount').value);
+            closePassengerModal();
+
+            const autoLoc = document.getElementById('autoLocation').checked;
+            if (autoLoc) getCurrentLocation();
+
+            const body = {
+                transport_type: 'SHELTER_EVACUATION',
+                incident_id: state.incidentId,
+                request_id: state.requestId,
+                current_location: { lat: state.lat || 13.7800, long: state.long || 100.5200 },
+                passenger_count: count,
+                version: state.version
+            };
+
+            try {
+                const url = `${config.serverUrl}/v1/resources/${config.resourceId}/transport-start`;
+                const token = config.dispatcherToken;
+                const opts = {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json',
+                        'Idempotency-Key': `transport-${config.resourceId}-${Date.now()}`
+                    },
+                    body: JSON.stringify(body)
+                };
+                const res = await fetch(url, opts);
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
+                state.version = data.version;
+                state.status = data.status;
+
+                if (data.destination) {
+                    log(`Shelter: ${data.destination.destination_name} (v${data.version})`, 'success');
+                    // Show published events status
+                    if (data.published_events && data.published_events.length > 0) {
+                        data.published_events.forEach(ev => {
+                            const status = ev.status === 'PUBLISHED' ? 'success' : 'error';
+                            log(`Event: ${ev.event_type} - ${ev.status}`, status);
+                        });
+                    }
+                } else if (data.degraded) {
+                    log(`Shelter: ${data.degraded_reason} (degraded)`, 'error');
+                }
+                fetchStatus();
+            } catch (e) {
+                log(`Transport ล้มเหลว: ${e.message}`, 'error');
+            }
+        }
+
+        function openHospitalTransportModal() {
+            pendingAction = 'hospital-transport';
+            document.getElementById('passengerModal').classList.remove('hidden');
+            // Update modal title for hospital
+            const modalTitle = document.querySelector('#passengerModal h3');
+            if (modalTitle) modalTitle.textContent = 'ยืนยันการไปโรงพยาบาล';
+        }
+
+        async function confirmHospitalTransport() {
+            const count = parseInt(document.getElementById('passengerCount').value);
+            closePassengerModal();
+
+            const autoLoc = document.getElementById('autoLocation').checked;
+            if (autoLoc) getCurrentLocation();
+
+            const body = {
+                transport_type: 'HOSPITAL_TRANSFER',
+                incident_id: state.incidentId,
+                request_id: state.requestId,
+                current_location: { lat: state.lat || 13.7800, long: state.long || 100.5200 },
+                passenger_count: count,
+                version: state.version
+            };
+
+            try {
+                const url = `${config.serverUrl}/v1/resources/${config.resourceId}/transport-start`;
+                const token = config.dispatcherToken;
+                const opts = {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json',
+                        'Idempotency-Key': `hospital-${config.resourceId}-${Date.now()}`
+                    },
+                    body: JSON.stringify(body)
+                };
+                const res = await fetch(url, opts);
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
+                state.version = data.version;
+                state.status = data.status;
+
+                if (data.destination) {
+                    log(`โรงพยาบาล: ${data.destination.destination_name} (v${data.version})`, 'success');
+                } else if (data.degraded) {
+                    log(`โรงพยาบาล: ${data.degraded_reason} (degraded)`, 'error');
+                }
+                fetchStatus();
+            } catch (e) {
+                log(`ไปโรงพยาบาลล้มเหลว: ${e.message}`, 'error');
+            }
+        }
+
+        function confirmTransportAction() {
+            if (pendingAction === 'hospital-transport') {
+                confirmHospitalTransport();
+            } else {
+                confirmTransport();
+            }
+        }
+
+        // Auto refresh every 30 seconds when on dashboard (reduced from 10s to save DB queries)
+        setInterval(() => {
+            if (!document.getElementById('dashboard').classList.contains('hidden')) {
+                fetchStatus();
+            }
+        }, 30000);
+    </script>
+</body>
+</html>
