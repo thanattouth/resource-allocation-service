@@ -329,6 +329,8 @@ resource "aws_instance" "app" {
     sqs_shelter_transporting_url            = aws_sqs_queue.shelter_transporting.url
     sqs_user_location_request_completed_url = aws_sqs_queue.request_completed.url
     sqs_incident_reporter_completed_url     = aws_sqs_queue.incident_completed.url
+    shelter_locator_base_url                = "https://yxncz50fuf.execute-api.us-east-1.amazonaws.com"
+    hospital_api_base_url                   = "https://7zwyafwj55.execute-api.us-east-1.amazonaws.com"
     image_uri                               = local.container_image_uri
   })
 

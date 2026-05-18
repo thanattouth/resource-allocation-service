@@ -69,12 +69,13 @@ function buildHospitalDestinationResponse(hospital) {
 async function startTransport(req, res) {
   const { resource_id } = req.params;
   const idempotencyKey = req.get('Idempotency-Key');
-  const {
+    const {
     incident_id: bodyIncidentId,
     request_id: bodyRequestId,
     transport_type,
     current_location,
     passenger_count,
+    injury_description,
     version
   } = req.body;
   const { incidentId, requestId, conflicts } = resolveRequestIdentifiers({
@@ -90,6 +91,7 @@ async function startTransport(req, res) {
     transport_type,
     current_location,
     passenger_count,
+    injury_description,
     version
   });
 
@@ -313,7 +315,7 @@ async function startTransport(req, res) {
             incidentId: incidentId || currentResource.assigned_incident_id || 'UNKNOWN',
             hospitalId: hospital.hospitalId,
             severityLevel: 'LOW',
-            injuryDescription: 'Emergency transport from disaster scene',
+            injuryDescription: injury_description || 'Emergency transport from disaster scene',
             lat: latitude,
             lon: longitude,
             requestedBy: 'ResourceAllocationService'
